@@ -105,41 +105,61 @@ where
 {
     /// In bytes
     pub fn len(&self) -> usize {
-        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
-        unsafe { gg::ggml_nbytes(self.tptr.as_ptr()) }
+        self.md.len_bytes
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.md.len_bytes == 0
     }
 
     pub fn elements(&self) -> usize {
-        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
-        unsafe { gg::ggml_nelements(self.tptr.as_ptr()) as usize }
+        self.md.len_elements
     }
 
     /// In bytes
     pub fn element_size(&self) -> usize {
-        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
-        unsafe { gg::ggml_element_size(self.tptr.as_ptr()) }
+        self.md.element_size
+    }
+
+    pub fn shape(&self) -> [usize; DIMS] {
+        self.md.shape
+    }
+
+    pub fn ggml_op(&self) -> gg::ggml_op {
+        self.md.op
+    }
+
+    pub fn element_type(&self) -> GgmlElementType {
+        self.md.typ
     }
 
     pub fn metadata(&self) -> GgmlTensorMetadata<DIMS> {
-        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
         self.md.clone()
     }
 
     /// # Safety
     /// Yeah right.
-    pub unsafe fn with_data<F>(&mut self, fun: F)
+    pub unsafe fn with_data_mut<F, O>(&mut self, fun: F) -> O
     where
-        F: FnOnce(&mut [u8]),
+        F: FnOnce(&mut [u8]) -> O,
     {
-        let len = self.len();
         let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
         fun(std::slice::from_raw_parts_mut(
             self.tptr.as_ref().data as *mut u8,
-            len,
+            self.md.len_bytes,
+        ))
+    }
+
+    /// # Safety
+    /// Yeah right.
+    pub unsafe fn with_data<F, O>(&self, fun: F) -> O
+    where
+        F: FnOnce(&[u8]) -> O,
+    {
+        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
+        fun(std::slice::from_raw_parts(
+            self.tptr.as_ref().data as *const u8,
+            self.md.len_bytes,
         ))
     }
 
