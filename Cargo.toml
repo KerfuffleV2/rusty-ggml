@@ -4,7 +4,7 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-ggml-sys-bleedingedge = "=2304250126.0.0"
+ggml-sys-bleedingedge = "=2304251821.0.0"
 anyhow = "1"
 thiserror = "1"
 num-traits = "0.2"

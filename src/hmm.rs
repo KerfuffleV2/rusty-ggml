@@ -5,7 +5,7 @@
 use crate::{context::*, tensor::*};
 
 fn testes() {
-    let mut ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
+    let ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
     {
         let t1 = ctx.tensor(GgmlElementType::F32, [1]);
         let t2 = ctx.tensor(GgmlElementType::F32, [2]);

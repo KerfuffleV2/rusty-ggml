@@ -94,7 +94,7 @@ impl GgmlContextBuilder {
 
 impl GgmlContext {
     pub fn tensor<const DIMS: usize>(
-        &mut self,
+        &self,
         typ: GgmlElementType,
         shape: [usize; DIMS],
     ) -> GgmlTensor<DIMS>
@@ -146,6 +146,11 @@ impl GgmlContext {
     pub fn compute(&self, graph: &mut GgmlGraph) {
         let ctx = self.ictx.lock().expect("Failed to get context mutex");
         unsafe { gg::ggml_graph_compute(ctx.0.as_ptr(), &mut graph.0) }
+    }
+
+    pub fn used_mem(&self) -> usize {
+        let ctx = self.ictx.lock().expect("Failed to get context mutex");
+        unsafe { gg::ggml_used_mem(ctx.0.as_ptr()) }
     }
 }
 

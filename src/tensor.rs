@@ -137,6 +137,11 @@ where
         self.md.clone()
     }
 
+    pub fn get_ne(&self) -> [i64; 4] {
+        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
+        unsafe { self.tptr.as_ref().ne }
+    }
+
     /// # Safety
     /// Yeah right.
     pub unsafe fn with_data_mut<F, O>(&mut self, fun: F) -> O
@@ -249,10 +254,15 @@ where
     pub fn map_binary<T: AsRef<GgmlTensor<DIMS>>>(
         &self,
         rhs: T,
-        fun: gg::ggml_binary_op_f32_t,
+        fun: unsafe extern "C" fn(
+            arg1: ::std::os::raw::c_int,
+            arg2: *mut f32,
+            arg3: *const f32,
+            arg4: *const f32,
+        ),
     ) -> Self {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_map_binary_f32(ctx, ltptr, rtptr, fun)
+            gg::ggml_map_binary_f32(ctx, ltptr, rtptr, Some(fun))
         })
     }
 
@@ -348,7 +358,7 @@ where
 
     pub fn copy_from<T: AsRef<GgmlTensor<DIMS>>>(self, rhs: T) -> Self {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_cpy(ctx, ltptr, rtptr)
+            gg::ggml_cpy(ctx, rtptr, ltptr)
         })
     }
 
@@ -358,6 +368,10 @@ where
 
     pub fn rms_norm(&self) -> Self {
         self.new_unary(|ctx, tptr| unsafe { gg::ggml_rms_norm(ctx, tptr) })
+    }
+
+    pub fn norm(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_norm(ctx, tptr) })
     }
 
     pub fn silu(&self) -> Self {
@@ -378,8 +392,11 @@ where
         })
     }
 
-    pub fn map_unary(&self, fun: gg::ggml_unary_op_f32_t) -> Self {
-        self.new_unary(|ctx, tptr| unsafe { gg::ggml_map_unary_f32(ctx, tptr, fun) })
+    pub fn map_unary(
+        &self,
+        fun: unsafe extern "C" fn(arg1: ::std::os::raw::c_int, arg2: *mut f32, arg3: *const f32),
+    ) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_map_unary_f32(ctx, tptr, Some(fun)) })
     }
 
     pub fn reshape<const ODIMS: usize>(&self, ne: [usize; ODIMS]) -> GgmlTensor<ODIMS>
