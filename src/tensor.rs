@@ -5,38 +5,14 @@ use num_traits::FromPrimitive;
 use ggml_sys_bleedingedge as gg;
 
 use crate::{
-    context::{GgmlContext, GgmlIContext},
+    context::{GContext, IContext},
     dims::*,
+    util::*,
 };
 
-#[repr(u32)]
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    num_derive::FromPrimitive,
-    num_derive::ToPrimitive,
-)]
-pub enum GgmlElementType {
-    F32 = gg::ggml_type_GGML_TYPE_F32,
-    F16 = gg::ggml_type_GGML_TYPE_F16,
-    Q4_0 = gg::ggml_type_GGML_TYPE_Q4_0,
-    Q4_1 = gg::ggml_type_GGML_TYPE_Q4_1,
-    Q4_2 = gg::ggml_type_GGML_TYPE_Q4_2,
-    Q4_3 = gg::ggml_type_GGML_TYPE_Q4_3,
-    Q8_0 = gg::ggml_type_GGML_TYPE_Q8_0,
-    I8 = gg::ggml_type_GGML_TYPE_I8,
-    I16 = gg::ggml_type_GGML_TYPE_I16,
-    I32 = gg::ggml_type_GGML_TYPE_I32,
-}
-
 #[derive(Debug, Clone, PartialEq)]
-pub struct GgmlTensorMetadata<const DIMS: usize> {
-    pub typ: GgmlElementType,
+pub struct GTensorMetadata<const DIMS: usize> {
+    pub typ: GType,
     pub op: gg::ggml_op,
     pub shape: [usize; DIMS],
     pub len_bytes: usize,
@@ -44,15 +20,15 @@ pub struct GgmlTensorMetadata<const DIMS: usize> {
     pub element_size: usize,
 }
 
-impl<const DIMS: usize> GgmlTensorMetadata<DIMS>
+impl<const DIMS: usize> GTensorMetadata<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
     /// # Safety
     /// Must be called with context mutex held.
-    pub(crate) fn from_ptr(nnp: NonNull<gg::ggml_tensor>) -> Self {
+    pub(crate) fn from_ptr(tp: NonNull<gg::ggml_tensor>) -> Self {
+        let (tr, tp) = (unsafe { tp.as_ref() }, tp.as_ptr());
         let (op, typ, shape) = {
-            let tr = unsafe { nnp.as_ref() };
             assert_eq!(DIMS, tr.n_dims as usize, "Unexpected number of dimensions!");
             let mut shp = [0; DIMS];
             shp.iter_mut()
@@ -60,14 +36,15 @@ where
                 .for_each(|(d, s)| *d = *s as usize);
             (tr.op, tr.type_, shp)
         };
+        let typ = GType::from_u32(typ).expect("Bad type!");
         unsafe {
             Self {
-                typ: GgmlElementType::from_u32(typ).expect("Bad type!"),
+                typ,
                 op,
                 shape,
-                len_bytes: gg::ggml_nbytes(nnp.as_ptr()),
-                len_elements: gg::ggml_nelements(nnp.as_ptr()) as usize,
-                element_size: gg::ggml_element_size(nnp.as_ptr()),
+                len_bytes: gg::ggml_nbytes(tp),
+                len_elements: gg::ggml_nelements(tp) as usize,
+                element_size: typ.element_size(),
             }
         }
     }
@@ -78,28 +55,28 @@ where
 // set state in tensor and context to indicate we're dead and
 // just allow other operations (except actually creating/runnning
 // the graph).
-pub struct GgmlTensor<const DIMS: usize> {
-    pub(crate) ctx: GgmlContext,
-    pub(crate) md: GgmlTensorMetadata<DIMS>,
+pub struct GTensor<const DIMS: usize> {
+    pub(crate) ctx: GContext,
+    pub(crate) md: GTensorMetadata<DIMS>,
     pub(crate) tptr: NonNull<gg::ggml_tensor>,
 }
 
-impl<const DIMS: usize> PartialEq for GgmlTensor<DIMS> {
+impl<const DIMS: usize> PartialEq for GTensor<DIMS> {
     fn eq(&self, other: &Self) -> bool {
         self.tptr == other.tptr
     }
 }
 
-impl<const DIMS: usize> AsRef<GgmlTensor<DIMS>> for GgmlTensor<DIMS>
+impl<const DIMS: usize> AsRef<GTensor<DIMS>> for GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
-    fn as_ref(&self) -> &GgmlTensor<DIMS> {
+    fn as_ref(&self) -> &GTensor<DIMS> {
         self
     }
 }
 
-impl<const DIMS: usize> GgmlTensor<DIMS>
+impl<const DIMS: usize> GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
@@ -129,11 +106,11 @@ where
         self.md.op
     }
 
-    pub fn element_type(&self) -> GgmlElementType {
+    pub fn element_type(&self) -> GType {
         self.md.typ
     }
 
-    pub fn metadata(&self) -> GgmlTensorMetadata<DIMS> {
+    pub fn metadata(&self) -> GTensorMetadata<DIMS> {
         self.md.clone()
     }
 
@@ -174,23 +151,23 @@ where
 
     /// # Safety
     /// Must be called with context mutex held.
-    pub(crate) unsafe fn new_from_ptr(ctx: &GgmlContext, p: *mut gg::ggml_tensor) -> Self {
+    pub(crate) unsafe fn new_from_ptr(ctx: &GContext, p: *mut gg::ggml_tensor) -> Self {
         let tptr = NonNull::new(p).expect("Got null pointer");
         Self {
             ctx: ctx.clone(),
-            md: GgmlTensorMetadata::from_ptr(tptr),
+            md: GTensorMetadata::from_ptr(tptr),
             tptr,
         }
     }
 
-    fn new_unary<const ODIMS: usize, F>(&self, fun: F) -> GgmlTensor<ODIMS>
+    fn new_unary<const ODIMS: usize, F>(&self, fun: F) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
         F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> *mut gg::ggml_tensor,
     {
         let ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
         let (ctxp, tptr) = (ctx.as_ptr(), self.tptr.as_ptr());
-        unsafe { GgmlTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, tptr)) }
+        unsafe { GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, tptr)) }
     }
 
     // RHS dims enforced elsewhere if necessary.
@@ -198,7 +175,7 @@ where
         &self,
         rhs: T,
         fun: F,
-    ) -> GgmlTensor<ODIMS>
+    ) -> GTensor<ODIMS>
     where
         Dim<RDIMS>: DimValid,
         Dim<ODIMS>: DimValid,
@@ -207,15 +184,15 @@ where
             *mut gg::ggml_tensor,
             *mut gg::ggml_tensor,
         ) -> *mut gg::ggml_tensor,
-        T: AsRef<GgmlTensor<RDIMS>>,
+        T: AsRef<GTensor<RDIMS>>,
     {
         let rhs = rhs.as_ref();
         let ctx = self.vaqctx_bin(rhs);
         let (ctxp, ltptr, rtptr) = (ctx.as_ptr(), self.tptr.as_ptr(), rhs.tptr.as_ptr());
-        unsafe { GgmlTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, ltptr, rtptr)) }
+        unsafe { GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, ltptr, rtptr)) }
     }
 
-    fn vaqctx_bin<const X: usize>(&self, other: &GgmlTensor<X>) -> MutexGuard<GgmlIContext> {
+    fn vaqctx_bin<const X: usize>(&self, other: &GTensor<X>) -> MutexGuard<IContext> {
         assert_eq!(
             self.ctx.ptrval, other.ctx.ptrval,
             "Cannot perform operation between tensors from different contexts!"
@@ -227,31 +204,31 @@ where
     // Binary ops
     //
 
-    pub fn add<T: AsRef<GgmlTensor<DIMS>>>(&self, rhs: T) -> GgmlTensor<DIMS> {
+    pub fn add<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> GTensor<DIMS> {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_add(ctx, ltptr, rtptr)
         })
     }
 
-    pub fn sub<T: AsRef<GgmlTensor<DIMS>>>(&self, rhs: T) -> Self {
+    pub fn sub<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_sub(ctx, ltptr, rtptr)
         })
     }
 
-    pub fn mul<T: AsRef<GgmlTensor<DIMS>>>(&self, rhs: T) -> Self {
+    pub fn mul<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_mul(ctx, ltptr, rtptr)
         })
     }
 
-    pub fn div<T: AsRef<GgmlTensor<DIMS>>>(&self, rhs: T) -> Self {
+    pub fn div<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_div(ctx, ltptr, rtptr)
         })
     }
 
-    pub fn map_binary<T: AsRef<GgmlTensor<DIMS>>>(
+    pub fn map_binary<T: AsRef<GTensor<DIMS>>>(
         &self,
         rhs: T,
         fun: unsafe extern "C" fn(
@@ -266,7 +243,7 @@ where
         })
     }
 
-    pub fn scale<const RDIMS: usize, T: AsRef<GgmlTensor<RDIMS>>>(&self, rhs: T) -> Self
+    pub fn scale<const RDIMS: usize, T: AsRef<GTensor<RDIMS>>>(&self, rhs: T) -> Self
     where
         Dim<RDIMS>: DimValid,
         DimPair<1, RDIMS>: DimEq,
@@ -276,42 +253,12 @@ where
         })
     }
 
-    pub fn repeat<const RDIMS: usize, T: AsRef<GgmlTensor<RDIMS>>>(
-        &self,
-        rhs: T,
-    ) -> GgmlTensor<RDIMS>
+    pub fn repeat<const RDIMS: usize, T: AsRef<GTensor<RDIMS>>>(&self, rhs: T) -> GTensor<RDIMS>
     where
         Dim<RDIMS>: DimValid,
     {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_repeat(ctx, ltptr, rtptr)
-        })
-    }
-
-    // FIXME: Try to find a way to express MIN<DIMS,RDIMS> with const generics.
-    pub fn mul_mat_smallrhs<const RDIMS: usize, T: AsRef<GgmlTensor<RDIMS>>>(
-        &self,
-        rhs: T,
-    ) -> GgmlTensor<RDIMS>
-    where
-        Dim<RDIMS>: DimValid,
-        DimPair<RDIMS, DIMS>: DimLt,
-    {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-
-    pub fn mul_mat<const RDIMS: usize, T: AsRef<GgmlTensor<RDIMS>>>(
-        &self,
-        rhs: T,
-    ) -> GgmlTensor<DIMS>
-    where
-        Dim<RDIMS>: DimValid,
-        DimPair<RDIMS, DIMS>: DimGtE,
-    {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
         })
     }
 
@@ -328,10 +275,10 @@ where
         })
     }
 
-    pub fn reshape_with<const RDIMS: usize, T: AsRef<GgmlTensor<RDIMS>>>(
+    pub fn reshape_with<const RDIMS: usize, T: AsRef<GTensor<RDIMS>>>(
         &self,
         rhs: T,
-    ) -> GgmlTensor<RDIMS>
+    ) -> GTensor<RDIMS>
     where
         Dim<RDIMS>: DimValid,
     {
@@ -340,10 +287,10 @@ where
         })
     }
 
-    pub fn get_rows<const RDIMS: usize, const ODIMS: usize, T: AsRef<GgmlTensor<RDIMS>>>(
+    pub fn get_rows<const RDIMS: usize, const ODIMS: usize, T: AsRef<GTensor<RDIMS>>>(
         &self,
         rhs: T,
-    ) -> GgmlTensor<ODIMS>
+    ) -> GTensor<ODIMS>
     where
         Dim<RDIMS>: DimValid,
         Dim<ODIMS>: DimValid,
@@ -356,10 +303,12 @@ where
         })
     }
 
-    pub fn copy_from<T: AsRef<GgmlTensor<DIMS>>>(self, rhs: T) -> Self {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+    pub fn copy_from<T: AsRef<GTensor<DIMS>>>(&mut self, rhs: T) {
+        let nt = self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_cpy(ctx, rtptr, ltptr)
-        })
+        });
+
+        *self = nt;
     }
 
     //
@@ -399,7 +348,7 @@ where
         self.new_unary(|ctx, tptr| unsafe { gg::ggml_map_unary_f32(ctx, tptr, Some(fun)) })
     }
 
-    pub fn reshape<const ODIMS: usize>(&self, ne: [usize; ODIMS]) -> GgmlTensor<ODIMS>
+    pub fn reshape<const ODIMS: usize>(&self, ne: [usize; ODIMS]) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimGtE,
@@ -418,7 +367,7 @@ where
         &self,
         ne: [i64; ODIMS],
         offset: [usize; ODIMS],
-    ) -> GgmlTensor<ODIMS>
+    ) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 4>: DimLt,
@@ -451,18 +400,18 @@ where
     }
 }
 
-impl<'a, const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Add<T> for &'a GgmlTensor<DIMS>
+impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Add<T> for &'a GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
-    type Output = GgmlTensor<DIMS>;
+    type Output = GTensor<DIMS>;
 
     fn add(self, rhs: T) -> Self::Output {
-        GgmlTensor::add(self, rhs)
+        GTensor::add(self, rhs)
     }
 }
 
-impl<const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Add<T> for GgmlTensor<DIMS>
+impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Add<T> for GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
@@ -473,18 +422,18 @@ where
     }
 }
 
-impl<'a, const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Sub<T> for &'a GgmlTensor<DIMS>
+impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Sub<T> for &'a GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
-    type Output = GgmlTensor<DIMS>;
+    type Output = GTensor<DIMS>;
 
     fn sub(self, rhs: T) -> Self::Output {
-        GgmlTensor::sub(self, rhs)
+        GTensor::sub(self, rhs)
     }
 }
 
-impl<const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Sub<T> for GgmlTensor<DIMS>
+impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Sub<T> for GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
@@ -495,18 +444,18 @@ where
     }
 }
 
-impl<'a, const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Div<T> for &'a GgmlTensor<DIMS>
+impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Div<T> for &'a GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
-    type Output = GgmlTensor<DIMS>;
+    type Output = GTensor<DIMS>;
 
     fn div(self, rhs: T) -> Self::Output {
-        GgmlTensor::div(self, rhs)
+        GTensor::div(self, rhs)
     }
 }
 
-impl<const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Div<T> for GgmlTensor<DIMS>
+impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Div<T> for GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
@@ -517,18 +466,18 @@ where
     }
 }
 
-impl<'a, const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Mul<T> for &'a GgmlTensor<DIMS>
+impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Mul<T> for &'a GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
-    type Output = GgmlTensor<DIMS>;
+    type Output = GTensor<DIMS>;
 
     fn mul(self, rhs: T) -> Self::Output {
-        GgmlTensor::mul(self, rhs)
+        GTensor::mul(self, rhs)
     }
 }
 
-impl<const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>> ops::Mul<T> for GgmlTensor<DIMS>
+impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Mul<T> for GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
@@ -536,5 +485,104 @@ where
 
     fn mul(self, rhs: T) -> Self::Output {
         &self * rhs
+    }
+}
+
+// FIXME: There should be a better way to do this.
+pub trait GMulMat<const LDIMS: usize, const RDIMS: usize>
+where
+    Dim<LDIMS>: DimValid,
+    Dim<RDIMS>: DimValid,
+{
+    type Output;
+
+    fn mul_mat<T: AsRef<GTensor<RDIMS>>>(&self, rhs: T) -> Self::Output;
+}
+
+impl GMulMat<1, 1> for GTensor<1> {
+    type Output = GTensor<1>;
+
+    fn mul_mat<T: AsRef<GTensor<1>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+impl GMulMat<2, 1> for GTensor<2> {
+    type Output = GTensor<1>;
+
+    fn mul_mat<T: AsRef<GTensor<1>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+impl GMulMat<3, 1> for GTensor<3> {
+    type Output = GTensor<1>;
+
+    fn mul_mat<T: AsRef<GTensor<1>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+
+//
+
+impl GMulMat<1, 2> for GTensor<1> {
+    type Output = GTensor<1>;
+
+    fn mul_mat<T: AsRef<GTensor<2>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+impl GMulMat<2, 2> for GTensor<2> {
+    type Output = GTensor<2>;
+
+    fn mul_mat<T: AsRef<GTensor<2>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+impl GMulMat<3, 2> for GTensor<3> {
+    type Output = GTensor<2>;
+
+    fn mul_mat<T: AsRef<GTensor<2>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+
+//
+
+impl GMulMat<1, 3> for GTensor<1> {
+    type Output = GTensor<1>;
+
+    fn mul_mat<T: AsRef<GTensor<3>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+impl GMulMat<2, 3> for GTensor<2> {
+    type Output = GTensor<2>;
+
+    fn mul_mat<T: AsRef<GTensor<3>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
+    }
+}
+impl GMulMat<3, 3> for GTensor<3> {
+    type Output = GTensor<3>;
+
+    fn mul_mat<T: AsRef<GTensor<3>>>(&self, rhs: T) -> Self::Output {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        })
     }
 }

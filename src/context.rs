@@ -7,21 +7,18 @@ use std::{
 
 use ggml_sys_bleedingedge as gg;
 
-use crate::{
-    dims::*,
-    tensor::{GgmlElementType, GgmlTensor},
-};
+use crate::{dims::*, tensor::GTensor, util::GType};
 
 #[repr(transparent)]
-pub(crate) struct GgmlIContext(pub(crate) NonNull<gg::ggml_context>);
+pub(crate) struct IContext(pub(crate) NonNull<gg::ggml_context>);
 
-impl Drop for GgmlIContext {
+impl Drop for IContext {
     fn drop(&mut self) {
         unsafe { gg::ggml_free(self.0.as_ptr()) }
     }
 }
 
-impl ops::Deref for GgmlIContext {
+impl ops::Deref for IContext {
     type Target = NonNull<gg::ggml_context>;
 
     fn deref(&self) -> &Self::Target {
@@ -29,16 +26,16 @@ impl ops::Deref for GgmlIContext {
     }
 }
 
-impl ops::DerefMut for GgmlIContext {
+impl ops::DerefMut for IContext {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
 #[derive(Clone)]
-pub struct GgmlContext {
+pub struct GContext {
     pub(crate) ptrval: usize,
-    pub(crate) ictx: Arc<Mutex<GgmlIContext>>,
+    pub(crate) ictx: Arc<Mutex<IContext>>,
 }
 
 #[repr(transparent)]
@@ -76,7 +73,7 @@ impl GgmlContextBuilder {
         self
     }
 
-    pub fn build(self) -> GgmlContext {
+    pub fn build(self) -> GContext {
         let ptr = unsafe {
             gg::ggml_init(gg::ggml_init_params {
                 mem_size: self.mem_size,
@@ -85,19 +82,15 @@ impl GgmlContextBuilder {
             })
         };
         assert_ne!(ptr, std::ptr::null_mut(), "GGML init failed");
-        GgmlContext {
+        GContext {
             ptrval: ptr as usize,
-            ictx: Arc::new(Mutex::new(GgmlIContext(NonNull::new(ptr).unwrap()))),
+            ictx: Arc::new(Mutex::new(IContext(NonNull::new(ptr).unwrap()))),
         }
     }
 }
 
-impl GgmlContext {
-    pub fn tensor<const DIMS: usize>(
-        &self,
-        typ: GgmlElementType,
-        shape: [usize; DIMS],
-    ) -> GgmlTensor<DIMS>
+impl GContext {
+    pub fn tensor<const DIMS: usize>(&self, typ: GType, shape: [usize; DIMS]) -> GTensor<DIMS>
     where
         Dim<DIMS>: DimValid,
         DimPair<DIMS, 4>: DimLt,
@@ -122,7 +115,7 @@ impl GgmlContext {
                 _ => unreachable!(),
             }
         };
-        unsafe { GgmlTensor::new_from_ptr(self, p) }
+        unsafe { GTensor::new_from_ptr(self, p) }
     }
 
     pub fn use_scratch_buffer<'a>(&'a self, maybebuf: Option<&'a mut ScratchBuffer>) {
@@ -164,7 +157,7 @@ impl GgmlGraph {
         Self(graph)
     }
 
-    pub fn build_forward_expand<const DIMS: usize, T: AsRef<GgmlTensor<DIMS>>>(&mut self, tensor: T)
+    pub fn build_forward_expand<const DIMS: usize, T: AsRef<GTensor<DIMS>>>(&mut self, tensor: T)
     where
         Dim<DIMS>: DimValid,
     {
