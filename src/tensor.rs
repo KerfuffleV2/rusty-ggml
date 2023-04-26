@@ -1,5 +1,6 @@
 use std::{ops, ptr::NonNull, sync::MutexGuard};
 
+use gg::ggml_flash_attn;
 use num_traits::FromPrimitive;
 
 use ggml_sys_bleedingedge as gg;
@@ -80,6 +81,12 @@ impl<const DIMS: usize> GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
+    pub const DIMS: usize = DIMS;
+
+    pub fn dims(&self) -> usize {
+        DIMS
+    }
+
     /// In bytes
     pub fn len(&self) -> usize {
         self.md.len_bytes
@@ -158,6 +165,14 @@ where
             md: GTensorMetadata::from_ptr(tptr),
             tptr,
         }
+    }
+
+    fn with_tensor<T, F>(&self, fun: F) -> T
+    where
+        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> T,
+    {
+        let ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
+        fun(ctx.as_ptr(), self.tptr.as_ptr())
     }
 
     fn new_unary<const ODIMS: usize, F>(&self, fun: F) -> GTensor<ODIMS>
@@ -262,6 +277,29 @@ where
         })
     }
 
+    pub fn conv_1d<const RDIMS: usize, const ODIMS: usize, T: AsRef<GTensor<RDIMS>>>(
+        &self,
+        rhs: T,
+        is_2s: bool,
+    ) -> Self
+    where
+        Dim<RDIMS>: DimValid,
+        Dim<ODIMS>: DimValid,
+        DimPair<DIMS, 2>: DimGtE,
+        DimPair<DIMS, 4>: DimLt,
+        DimPair<RDIMS, 2>: DimGtE,
+        DimPair<ODIMS, 2>: DimEq,
+    {
+        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+            if is_2s {
+                gg::ggml_conv_1d_2s(ctx, ltptr, rtptr)
+            } else {
+                gg::ggml_conv_1d_1s(ctx, ltptr, rtptr)
+            }
+        })
+    }
+
+    // FIXME: Needs shape fixup?
     pub fn permute(&self, axes: [usize; 4]) -> Self {
         self.new_unary(|ctx, tptr| unsafe {
             gg::ggml_permute(
@@ -311,6 +349,91 @@ where
         *self = nt;
     }
 
+    pub fn fill_zero(&mut self) {
+        self.with_tensor(|_ctx, tptr| unsafe {
+            let _ = gg::ggml_set_zero(tptr);
+        })
+    }
+
+    pub fn fill_i32(&mut self, val: i32) {
+        self.with_tensor(|_ctx, tptr| unsafe {
+            let _ = gg::ggml_set_i32(tptr, val);
+        })
+    }
+
+    pub fn fill_f32(&mut self, val: f32) {
+        self.with_tensor(|_ctx, tptr| unsafe {
+            let _ = gg::ggml_set_f32(tptr, val);
+        })
+    }
+
+    pub fn get_f32_1d(&self, index: usize) -> f32 {
+        self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_get_f32_1d(tptr, index as i32) })
+    }
+
+    pub fn get_i32_1d(&self, index: usize) -> i32 {
+        self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_get_i32_1d(tptr, index as i32) })
+    }
+
+    pub fn set_f32_1d(&mut self, index: usize, val: f32) {
+        self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_set_f32_1d(tptr, index as i32, val) })
+    }
+
+    pub fn set_i32_1d(&mut self, index: usize, val: i32) {
+        self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_set_i32_1d(tptr, index as i32, val) })
+    }
+
+    /// # Safety
+    /// Fills a tensor with raw data. It's your responsibility to make sure the format is correct.
+    pub unsafe fn populate_raw<S: AsRef<[u8]>>(&mut self, data: S) {
+        let data = data.as_ref();
+        assert_eq!(
+            self.len(),
+            data.len(),
+            "Bad incoming length for populate_raw"
+        );
+        self.with_tensor(|_ctx, tptr| {
+            let tref = tptr.as_ref().unwrap();
+            (tref.data as *mut u8).copy_from_nonoverlapping(data.as_ptr(), data.len())
+        })
+    }
+
+    // FIXME: More generic versions of these functions.
+    pub fn populate_f32<S: AsRef<[f32]>>(&mut self, data: S) {
+        let data = data.as_ref();
+        assert_eq!(self.md.typ, GType::F32);
+        assert_eq!(
+            self.elements(),
+            data.len(),
+            "Bad incoming length for populate_f32"
+        );
+        unsafe {
+            self.with_tensor(|_ctx, tptr| {
+                let tref = tptr.as_ref().unwrap();
+                (tref.data as *mut f32).copy_from_nonoverlapping(data.as_ptr(), data.len())
+            })
+        }
+    }
+
+    // FIXME: More generic versions of these functions.
+    pub fn copy_to_slice_f32<S: AsMut<[f32]>>(&self, mut dest: S) {
+        let dest = dest.as_mut();
+        let elements = self.elements();
+        assert_eq!(self.md.typ, GType::F32);
+        assert_eq!(
+            elements,
+            dest.len(),
+            "Destination slice doesnt't have enough space in copy_to_slice_f32"
+        );
+        unsafe {
+            self.with_tensor(|_ctx, tptr| {
+                let ts =
+                    std::slice::from_raw_parts(tptr.as_ref().unwrap().data as *const f32, elements);
+                dest.copy_from_slice(ts);
+            })
+        }
+    }
+
     //
     // Unary ops
     //
@@ -325,6 +448,58 @@ where
 
     pub fn silu(&self) -> Self {
         self.new_unary(|ctx, tptr| unsafe { gg::ggml_silu(ctx, tptr) })
+    }
+
+    pub fn sqr(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_sqr(ctx, tptr) })
+    }
+
+    pub fn sqrt(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_sqrt(ctx, tptr) })
+    }
+
+    pub fn sum<const ODIMS: usize>(&self) -> GTensor<ODIMS>
+    where
+        Dim<ODIMS>: DimValid,
+        DimPair<ODIMS, 2>: DimLt,
+    {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_sum(ctx, tptr) })
+    }
+
+    pub fn mean(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_mean(ctx, tptr) })
+    }
+
+    pub fn abs(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_abs(ctx, tptr) })
+    }
+
+    pub fn sgn(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_sgn(ctx, tptr) })
+    }
+
+    pub fn neg(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_neg(ctx, tptr) })
+    }
+
+    pub fn step(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_step(ctx, tptr) })
+    }
+
+    pub fn relu(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_relu(ctx, tptr) })
+    }
+
+    pub fn gelu(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_gelu(ctx, tptr) })
+    }
+
+    pub fn cont(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_cont(ctx, tptr) })
+    }
+
+    pub fn transpose(&self) -> Self {
+        self.new_unary(|ctx, tptr| unsafe { gg::ggml_transpose(ctx, tptr) })
     }
 
     pub fn diag_mask_inf(self, val: usize) -> Self {
@@ -348,6 +523,7 @@ where
         self.new_unary(|ctx, tptr| unsafe { gg::ggml_map_unary_f32(ctx, tptr, Some(fun)) })
     }
 
+    // FIXME: Needs shape fixup?
     pub fn reshape<const ODIMS: usize>(&self, ne: [usize; ODIMS]) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
@@ -363,6 +539,7 @@ where
         })
     }
 
+    // FIXME: Needs shape fixup?
     pub fn view<const ODIMS: usize>(
         &self,
         ne: [i64; ODIMS],
@@ -398,93 +575,127 @@ where
             }
         })
     }
-}
 
-impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Add<T> for &'a GTensor<DIMS>
-where
-    Dim<DIMS>: DimValid,
-{
-    type Output = GTensor<DIMS>;
+    //
+    // Other ops
+    //
 
-    fn add(self, rhs: T) -> Self::Output {
-        GTensor::add(self, rhs)
+    pub fn flash_attn<
+        const KDIMS: usize,
+        const VDIMS: usize,
+        const ODIMS: usize,
+        KT: AsRef<GTensor<KDIMS>>,
+        VT: AsRef<GTensor<VDIMS>>,
+    >(
+        &self,
+        kt: KT,
+        vt: VT,
+        masked: bool,
+    ) -> GTensor<ODIMS>
+    where
+        Dim<KDIMS>: DimValid,
+        Dim<VDIMS>: DimValid,
+        Dim<ODIMS>: DimValid,
+        Self: GMulMat<KDIMS, DIMS>,
+        DimPair<ODIMS, 4>: DimEq,
+    {
+        let kref = kt.as_ref();
+        let vref = vt.as_ref();
+
+        let ctx = self.vaqctx_bin(kref);
+        assert_eq!(
+            self.ctx.ptrval, vref.ctx.ptrval,
+            "Cannot perform operation between tensors from different contexts!"
+        );
+        let (ctxp, qtptr, ktptr, vtptr) = (
+            ctx.as_ptr(),
+            self.tptr.as_ptr(),
+            kref.tptr.as_ptr(),
+            vref.tptr.as_ptr(),
+        );
+        unsafe {
+            GTensor::<ODIMS>::new_from_ptr(
+                &self.ctx,
+                ggml_flash_attn(ctxp, qtptr, ktptr, vtptr, masked),
+            )
+        }
+    }
+
+    pub fn flash_ff<
+        const B0DIMS: usize,
+        const B1DIMS: usize,
+        const C0DIMS: usize,
+        const C1DIMS: usize,
+        const ODIMS: usize,
+        B0T: AsRef<GTensor<B0DIMS>>,
+        B1T: AsRef<GTensor<B1DIMS>>,
+        C0T: AsRef<GTensor<C0DIMS>>,
+        C1T: AsRef<GTensor<C1DIMS>>,
+    >(
+        // Just an operation that takes 5 tensors. No big deal.
+        &self,
+        b0t: B0T,
+        b1t: B1T,
+        c0t: C0T,
+        c1t: C1T,
+    ) -> GTensor<ODIMS>
+    where
+        Dim<B0DIMS>: DimValid,
+        Dim<B1DIMS>: DimValid,
+        Dim<C0DIMS>: DimValid,
+        Dim<C1DIMS>: DimValid,
+        Dim<ODIMS>: DimValid,
+        Self: GMulMat<B0DIMS, DIMS>,
+        DimPair<ODIMS, 4>: DimEq,
+    {
+        let (b0ref, b1ref, c0ref, c1ref) = (b0t.as_ref(), b1t.as_ref(), c0t.as_ref(), c1t.as_ref());
+
+        let ctx = self.vaqctx_bin(b0ref);
+        assert!(
+            [b1ref.ctx.ptrval, c0ref.ctx.ptrval, c1ref.ctx.ptrval]
+                .into_iter()
+                .all(|v| v == self.ctx.ptrval),
+            "Cannot perform operation between tensors from different contexts!"
+        );
+
+        let (ctxp, atptr, b0tptr, b1tptr, c0tptr, c1tptr) = (
+            ctx.as_ptr(),
+            self.tptr.as_ptr(),
+            b0ref.tptr.as_ptr(),
+            b1ref.tptr.as_ptr(),
+            c0ref.tptr.as_ptr(),
+            c1ref.tptr.as_ptr(),
+        );
+        unsafe {
+            GTensor::<ODIMS>::new_from_ptr(
+                &self.ctx,
+                gg::ggml_flash_ff(ctxp, atptr, b0tptr, b1tptr, c0tptr, c1tptr),
+            )
+        }
     }
 }
 
-impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Add<T> for GTensor<DIMS>
+impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::BitXor<T> for &'a GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
+    GTensor<DIMS>: GMulMat<DIMS, DIMS>,
 {
-    type Output = Self;
+    type Output = <GTensor<DIMS> as GMulMat<DIMS, DIMS>>::Output;
 
-    fn add(self, rhs: T) -> Self::Output {
-        &self + rhs
+    fn bitxor(self, rhs: T) -> Self::Output {
+        GTensor::mul_mat(self, rhs.as_ref())
     }
 }
 
-impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Sub<T> for &'a GTensor<DIMS>
+impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::BitXor<T> for GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
+    Self: GMulMat<DIMS, DIMS>,
 {
-    type Output = GTensor<DIMS>;
+    type Output = <Self as GMulMat<DIMS, DIMS>>::Output;
 
-    fn sub(self, rhs: T) -> Self::Output {
-        GTensor::sub(self, rhs)
-    }
-}
-
-impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Sub<T> for GTensor<DIMS>
-where
-    Dim<DIMS>: DimValid,
-{
-    type Output = Self;
-
-    fn sub(self, rhs: T) -> Self::Output {
-        &self - rhs
-    }
-}
-
-impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Div<T> for &'a GTensor<DIMS>
-where
-    Dim<DIMS>: DimValid,
-{
-    type Output = GTensor<DIMS>;
-
-    fn div(self, rhs: T) -> Self::Output {
-        GTensor::div(self, rhs)
-    }
-}
-
-impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Div<T> for GTensor<DIMS>
-where
-    Dim<DIMS>: DimValid,
-{
-    type Output = Self;
-
-    fn div(self, rhs: T) -> Self::Output {
-        &self / rhs
-    }
-}
-
-impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Mul<T> for &'a GTensor<DIMS>
-where
-    Dim<DIMS>: DimValid,
-{
-    type Output = GTensor<DIMS>;
-
-    fn mul(self, rhs: T) -> Self::Output {
-        GTensor::mul(self, rhs)
-    }
-}
-
-impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::Mul<T> for GTensor<DIMS>
-where
-    Dim<DIMS>: DimValid,
-{
-    type Output = Self;
-
-    fn mul(self, rhs: T) -> Self::Output {
-        &self * rhs
+    fn bitxor(self, rhs: T) -> Self::Output {
+        &self ^ rhs.as_ref()
     }
 }
 
@@ -499,90 +710,111 @@ where
     fn mul_mat<T: AsRef<GTensor<RDIMS>>>(&self, rhs: T) -> Self::Output;
 }
 
-impl GMulMat<1, 1> for GTensor<1> {
-    type Output = GTensor<1>;
+impl<const DIMS: usize> GMulMat<DIMS, DIMS> for GTensor<DIMS>
+where
+    Dim<DIMS>: DimValid,
+{
+    type Output = GTensor<DIMS>;
 
-    fn mul_mat<T: AsRef<GTensor<1>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-}
-impl GMulMat<2, 1> for GTensor<2> {
-    type Output = GTensor<1>;
-
-    fn mul_mat<T: AsRef<GTensor<1>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-}
-impl GMulMat<3, 1> for GTensor<3> {
-    type Output = GTensor<1>;
-
-    fn mul_mat<T: AsRef<GTensor<1>>>(&self, rhs: T) -> Self::Output {
+    fn mul_mat<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self::Output {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_mul_mat(ctx, ltptr, rtptr)
         })
     }
 }
 
-//
+macro_rules! mk_gopinstances {
+    ( $( ($trait:ident, $fun:ident) ),+ ) => { $(
+        impl<'a, const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::$trait<T> for &'a GTensor<DIMS>
+        where
+            Dim<DIMS>: DimValid,
+        {
+            type Output = GTensor<DIMS>;
 
-impl GMulMat<1, 2> for GTensor<1> {
-    type Output = GTensor<1>;
+            fn $fun(self, rhs: T) -> Self::Output {
+                GTensor::$fun(self, rhs)
+            }
+        }
 
-    fn mul_mat<T: AsRef<GTensor<2>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-}
-impl GMulMat<2, 2> for GTensor<2> {
-    type Output = GTensor<2>;
+        impl<const DIMS: usize, T: AsRef<GTensor<DIMS>>> ops::$trait<T> for GTensor<DIMS>
+        where
+            Dim<DIMS>: DimValid,
+        {
+            type Output = GTensor<DIMS>;
 
-    fn mul_mat<T: AsRef<GTensor<2>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-}
-impl GMulMat<3, 2> for GTensor<3> {
-    type Output = GTensor<2>;
-
-    fn mul_mat<T: AsRef<GTensor<2>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
+            fn $fun(self, rhs: T) -> Self::Output {
+                GTensor::$fun(&self, rhs)
+            }
+        }
+    )*};
 }
 
-//
+mk_gopinstances!((Add, add), (Sub, sub), (Mul, mul), (Div, div));
 
-impl GMulMat<1, 3> for GTensor<1> {
-    type Output = GTensor<1>;
+// This is rather unpleasant.
+macro_rules! mk_gmulmatinstances {
+    ( $( ($l:literal, $r:literal, $o:literal) ),+ ) => { $(
+        impl GMulMat<$l, $r> for GTensor<$l> {
+            type Output = GTensor<$o>;
 
-    fn mul_mat<T: AsRef<GTensor<3>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
+            fn mul_mat<T: AsRef<GTensor<$r>>>(&self, rhs: T) -> Self::Output {
+                self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
+                    gg::ggml_mul_mat(ctx, ltptr, rtptr)
+                })
+            }
+        }
+
+        impl<'a, 'b> ops::BitXor<&'b GTensor<$r>> for &'a GTensor<$l>
+        where
+            GTensor<$l>: GMulMat<$l, $r>,
+        {
+            type Output = GTensor<$o>;
+
+            fn bitxor(self, rhs: &'b GTensor<$r>) -> Self::Output {
+                GTensor::mul_mat(self, rhs)
+            }
+        }
+
+        impl<'a> ops::BitXor<GTensor<$r>> for &'a GTensor<$l>
+        where
+            GTensor<$l>: GMulMat<$l, $r>,
+        {
+            type Output = GTensor<$o>;
+
+            fn bitxor(self, rhs: GTensor<$r>) -> Self::Output {
+                GTensor::mul_mat(self, &rhs)
+            }
+        }
+
+        impl<'a> ops::BitXor<&'a GTensor<$r>> for GTensor<$l>
+        where
+            GTensor<$l>: GMulMat<$l, $r>,
+        {
+            type Output = GTensor<$o>;
+
+            fn bitxor(self, rhs: &'a GTensor<$r>) -> Self::Output {
+                GTensor::mul_mat(&self, rhs)
+            }
+        }
+
+        impl ops::BitXor<GTensor<$r>> for GTensor<$l>
+        where
+            GTensor<$l>: GMulMat<$l, $r>,
+        {
+            type Output = GTensor<$o>;
+
+            fn bitxor(self, rhs: GTensor<$r>) -> Self::Output {
+                GTensor::mul_mat(&self, &rhs)
+            }
+        }
+    )*};
 }
-impl GMulMat<2, 3> for GTensor<2> {
-    type Output = GTensor<2>;
 
-    fn mul_mat<T: AsRef<GTensor<3>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-}
-impl GMulMat<3, 3> for GTensor<3> {
-    type Output = GTensor<3>;
-
-    fn mul_mat<T: AsRef<GTensor<3>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
-        })
-    }
-}
+mk_gmulmatinstances!(
+    (2, 1, 1),
+    (3, 1, 1),
+    (1, 2, 1),
+    (3, 2, 2),
+    (1, 3, 1),
+    (2, 3, 2)
+);
