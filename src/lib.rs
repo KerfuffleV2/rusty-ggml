@@ -1,7 +1,7 @@
 pub mod context;
 pub mod dims;
+pub mod gtensor;
 pub mod quantize;
-pub mod tensor;
 pub mod util;
 
 pub mod prelude;

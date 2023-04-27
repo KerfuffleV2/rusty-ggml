@@ -7,7 +7,7 @@ use std::{
 
 use ggml_sys_bleedingedge as gg;
 
-use crate::{dims::*, tensor::GTensor, util::GType};
+use crate::{dims::*, gtensor::GTensor, util::GType};
 
 #[repr(transparent)]
 pub(crate) struct IContext(pub(crate) NonNull<gg::ggml_context>);
