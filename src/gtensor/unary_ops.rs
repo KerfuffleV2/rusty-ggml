@@ -17,23 +17,6 @@ where
     Dim<DIMS>: DimValid,
 {
     mk_simple_uops! {
-        /// Perform LayerNorm operation on tensor `A`.
-        /// Returns a new tensor.
-        ///
-        /// `a.norm()`
-        ///
-        /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
-        /// for more information and comparison with the [GTensor::rms_norm] function.
-        [rms_norm, ggml_rms_norm],
-
-        /// Perform RMSNorm operation on tensor `A`.
-        /// Returns a new tensor.
-        ///
-        /// `a.rms_norm()`
-        ///
-        /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
-        /// for more information and comparison with the [GTensor::norm] function.
-        [norm, ggml_norm],
 
 
         /// Elementwise square of tensor `A`.
@@ -47,7 +30,7 @@ where
         /// 1. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [2, 2, 2];
         /// let result = a.sqr();
         /// assert_eq!(result, [4, 4, 4]);
@@ -63,7 +46,7 @@ where
         /// 1. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [9, 9, 9];
         /// let result = a.sqrt();
         /// assert_eq!(result, [3, 3, 3]);
@@ -81,7 +64,7 @@ where
         /// 1. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [-1, -2, -3];
         /// let result = a.abs();
         /// assert_eq!(result, [1, 2, 3]);
@@ -100,7 +83,7 @@ where
         /// 4. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [-5, 0, 6];
         /// let result = a.sgn();
         /// assert_eq!(result, [-1, 0, 1]);
@@ -117,12 +100,30 @@ where
         /// 1. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [1, -1, -6, 7];
         /// let result = a.sgn();
         /// assert_eq!(result, [-1, 1, 6, -7]);
         /// ```
         [neg, ggml_neg],
+
+        /// Perform LayerNorm operation on tensor `A`.
+        /// Returns a new tensor.
+        ///
+        /// `a.norm()`
+        ///
+        /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
+        /// for more information and comparison with the [GTensor::rms_norm] function.
+        [rms_norm, ggml_rms_norm],
+
+        /// Perform RMSNorm operation on tensor `A`.
+        /// Returns a new tensor.
+        ///
+        /// `a.rms_norm()`
+        ///
+        /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
+        /// for more information and comparison with the [GTensor::norm] function.
+        [norm, ggml_norm],
 
         /// Elementwise step operation on tensor `A`.
         /// Returns a new tensor.
@@ -137,7 +138,7 @@ where
         /// 3. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [1, -1, -6, 7];
         /// let result = a.step();
         /// assert_eq!(result, [1, 0, 0, 1]);
@@ -157,7 +158,7 @@ where
         /// 3. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [1, -1, -6, 7];
         /// let result = a.relu();
         /// assert_eq!(result, [1, 0, 0, 7]);
@@ -195,7 +196,7 @@ where
         /// `a.transpose()`
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a =
         ///     [ [1, 1, 1],
         ///       [2, 2, 3],
@@ -233,7 +234,7 @@ where
     /// 2. The result tensor will have type [GType::F32](crate::util::GType::F32).
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// let a = [1, 2, 3, 4];
     /// let result = a.mean();
     /// assert_eq!(result, [2.5]);
@@ -256,7 +257,7 @@ where
     /// 2. The result tensor will the same type as `A`.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// let a = [1, 2, 3, 4];
     /// let result = a.sum();
     /// assert_eq!(result, [10]);
@@ -297,7 +298,7 @@ where
     ) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
-        DimPair<ODIMS, 4>: DimLt,
+        DimPair<ODIMS, 3>: DimLt,
     {
         self.new_unary(|ctx, tptr| unsafe {
             let elsize = gg::ggml_element_size(tptr);

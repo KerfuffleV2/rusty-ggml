@@ -57,7 +57,7 @@ where
         /// 2. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [2, 2, 2];
         /// let b = [1, 1, 1];
         /// let result = a.add(b);
@@ -74,7 +74,7 @@ where
         /// 2. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [3, 3, 3];
         /// let b = [1, 1, 1];
         /// let result = a.div(b);
@@ -94,7 +94,7 @@ where
         /// 2. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [3, 3, 3];
         /// let b = [2, 2, 2];
         /// let result = a.mul(b);
@@ -112,7 +112,7 @@ where
         /// 2. Result will have the shape of `A`.
         ///
         /// **Example** (pseudocode):
-        /// ```rust
+        /// ```ignore
         /// let a = [6, 6, 6];
         /// let b = [2, 2, 2];
         /// let result = a.div(b);
@@ -132,7 +132,7 @@ where
     /// 2. Result will have the shape of `A`.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// let a = [3, 3, 3];
     /// let b = [2];
     /// let result = a.scale(b);
@@ -163,7 +163,7 @@ where
     /// 4. Result will have the shape of `B`.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// let a =
     ///     [ [2, 3],
     ///       [4, 5] ];
@@ -235,7 +235,7 @@ where
     /// 2. The axes must be a valid dimension. In other words, a number between `0` and `3` inclusive.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// let a =
     ///     [ [1, 1, 1],
     ///       [2, 2, 3],

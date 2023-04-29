@@ -160,11 +160,14 @@ where
         unsafe { self.tptr.as_ref().ne }
     }
 
-    /// Returns GGML's conception of this tensor's strides.
+    /// Returns GGML's conception of this tensor's strides in bytes.
     ///
     /// **Note**: This is a low level function. Be aware that GGML
     /// shapes have the first two dimensions swapped. This also
     /// applies to the order of strides.
+    ///
+    /// **Note 2**: Also be aware that the strides are based on
+    /// bytes, and _not_ the number of elements.
     pub fn get_nb(&self) -> [usize; 4] {
         let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
         unsafe { self.tptr.as_ref().nb }

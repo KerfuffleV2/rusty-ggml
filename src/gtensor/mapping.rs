@@ -8,7 +8,7 @@ use crate::dims::*;
 ///
 /// **Example**:
 ///
-/// ```rust
+/// ```ignore
 /// tensor.map_unary(map_unop!(|src| src + 10))
 /// ```
 macro_rules! map_unop (
@@ -35,7 +35,7 @@ macro_rules! map_unop (
 ///
 /// **Example**:
 ///
-/// ```rust
+/// ```ignore
 /// a.map_binary(b, map_binop!(|el_a, el_b| a + b))
 /// ```
 macro_rules! map_binop (
@@ -82,7 +82,7 @@ where
     /// 2. The result will be the same shape and type as `A`.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// use std::ffi::c_int;
     /// unsafe extern "C" fn unary_map_fn(n: c_int, dst: *mut f32, src: *const f32) {
     ///     let dst = ::std::slice::from_raw_parts_mut(dst, n as usize);
@@ -118,7 +118,7 @@ where
     /// 3. The result will be the same shape and type as `A`.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// use std::ffi::c_int;
     /// unsafe extern "C" fn binary_map_fn(
     ///     n: c_int,

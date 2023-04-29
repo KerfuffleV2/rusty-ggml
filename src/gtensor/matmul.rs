@@ -55,7 +55,7 @@ where
     ///    between `A` and `B`.
     ///
     /// **Example** (pseudocode):
-    /// ```rust
+    /// ```ignore
     /// let a = [2, 2];
     /// let b =
     ///     [ [1, 1],
