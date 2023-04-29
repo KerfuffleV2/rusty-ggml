@@ -110,7 +110,7 @@ where
     /// See the [map_binop!] macro which will help you create the required
     /// `unsafe extern "C"` function.
     ///
-    /// `a.map_binary(binary_fun_ptr)`
+    /// `a.map_binary(b, binary_fun_ptr)`
     ///
     /// **Invariants**
     /// 1. The tensor must be of type [GType::F32](crate::util::GType::F32).
