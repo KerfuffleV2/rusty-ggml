@@ -20,7 +20,6 @@ pub enum GType {
     Q4_0 = gg::ggml_type_GGML_TYPE_Q4_0,
     Q4_1 = gg::ggml_type_GGML_TYPE_Q4_1,
     Q4_2 = gg::ggml_type_GGML_TYPE_Q4_2,
-    Q4_3 = gg::ggml_type_GGML_TYPE_Q4_3,
     Q5_0 = gg::ggml_type_GGML_TYPE_Q5_0,
     Q5_1 = gg::ggml_type_GGML_TYPE_Q5_1,
     Q8_0 = gg::ggml_type_GGML_TYPE_Q8_0,
