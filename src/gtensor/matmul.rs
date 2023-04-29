@@ -56,11 +56,12 @@ where
     ///
     /// **Example** (pseudocode):
     /// ```ignore
-    /// let a = [2, 2];
-    /// let b =
+    ///
+    /// let a =
     ///     [ [1, 1],
     ///       [2, 2] ];
-    /// let expected = [6, 6];
+    /// let b = [2, 2];
+    /// let expected = [4, 8];
     /// let result = a.mul_mat(b);
     /// assert_eq!(result, expected);
     /// ```

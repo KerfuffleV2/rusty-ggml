@@ -343,3 +343,82 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{context::*, util::GType};
+
+    macro_rules! test_uop_simple {
+        (
+            $fname:ident ; $meth:ident(
+             $input:expr ;
+             $shape:expr =>
+             $expect:expr
+        ) ) => {
+            #[test]
+            pub fn $fname() {
+                let expect = $expect;
+                let mut output = expect.clone();
+                let ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
+                let mut g = GgmlGraph::new(1);
+                let mut t = ctx.tensor(GType::F32, $shape);
+                t.populate_f32($input);
+                let t2 = t.$meth();
+                g.build_forward_expand(&t2);
+                ctx.compute(&mut g);
+                t2.copy_to_slice_f32(&mut output);
+                assert_eq!(output, expect);
+            }
+        };
+    }
+
+    test_uop_simple!(test_sqr ; sqr(
+        [2.0, 2.0, 2.0]; [3] => [4.0, 4.0, 4.0]
+    ));
+
+    test_uop_simple!(test_sqrt ; sqrt(
+        [9.0, 9.0, 9.0]; [3] => [3.0, 3.0, 3.0]
+    ));
+
+    test_uop_simple!(test_abs ; abs(
+        [-1.0, -2.0, -3.0]; [3] => [1.0, 2.0, 3.0]
+    ));
+
+    test_uop_simple!(test_sgn ; sgn(
+        [-5.0, 0.0, 6.0]; [3] => [-1.0, 0.0, 1.0]
+    ));
+
+    test_uop_simple!(test_neg ; neg(
+        [1.0, -1.0, 6.0, -7.0]; [4] => [-1.0, 1.0, -6.0, 7.0]
+    ));
+
+    test_uop_simple!(test_step ; step(
+        [1.0, -1.0, -6.0, 7.0]; [4] => [1.0, 0.0, 0.0, 1.0]
+    ));
+
+    test_uop_simple!(test_relu ; relu(
+        [1.0, -1.0, -6.0, 7.0]; [4] => [1.0, 0.0, 0.0, 7.0]
+    ));
+
+    test_uop_simple!(test_mean ; mean(
+        [1.0, 2.0, 3.0, 4.0]; [4] => [2.5]
+    ));
+
+    test_uop_simple!(test_sum ; sum(
+        [1.0, 2.0, 3.0, 4.0]; [4] => [10.0]
+    ));
+
+    // #[test]
+    // pub fn test_sqr() {
+    //     let ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
+    //     let mut g = GgmlGraph::new(1);
+    //     let mut t = ctx.tensor(GType::F32, [3]);
+    //     t.populate_f32([2.0, 2.0, 2.0]);
+    //     let t2 = t.sqr();
+    //     g.build_forward_expand(&t2);
+    //     ctx.compute(&mut g);
+    //     let mut output = [0.0; 3];
+    //     t2.copy_to_slice_f32(&mut output);
+    //     assert_eq!(output, [4.0, 4.0, 4.0]);
+    // }
+}

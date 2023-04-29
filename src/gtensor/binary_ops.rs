@@ -296,3 +296,83 @@ where
 }
 
 mk_gopinstances!((Add, add), (Sub, sub), (Mul, mul), (Div, div));
+
+#[cfg(test)]
+mod tests {
+    use crate::{context::*, gtensor::GMulMat, util::GType};
+
+    macro_rules! test_binop_simple {
+        (
+            $fname:ident ; $meth:ident(
+             $input_a:expr ;
+             $shape_a:expr ,
+             $input_b:expr ;
+             $shape_b:expr =>
+             $expect:expr
+        ) ) => {
+            #[test]
+            pub fn $fname() {
+                let expect = $expect;
+                let mut output = expect.clone();
+                let ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
+                let mut g = GgmlGraph::new(1);
+                let mut ta = ctx.tensor(GType::F32, $shape_a);
+                ta.populate_f32($input_a);
+                let mut tb = ctx.tensor(GType::F32, $shape_b);
+                tb.populate_f32($input_b);
+                let t2 = ta.$meth(tb);
+                g.build_forward_expand(&t2);
+                ctx.compute(&mut g);
+                t2.copy_to_slice_f32(&mut output);
+                assert_eq!(output, expect);
+            }
+        };
+    }
+
+    test_binop_simple!(test_add ; add(
+        [2.0, 2.0, 2.0]; [3],
+        [1.0, 1.0, 1.0]; [3] => [3.0, 3.0, 3.0]
+    ));
+
+    test_binop_simple!(test_sub ; sub(
+        [3.0, 3.0, 3.0]; [3],
+        [1.0, 1.0, 1.0]; [3] => [2.0, 2.0, 2.0]
+    ));
+
+    test_binop_simple!(test_mul ; mul(
+        [3.0, 3.0, 3.0]; [3],
+        [2.0, 2.0, 2.0]; [3] => [6.0, 6.0, 6.0]
+    ));
+
+    test_binop_simple!(test_div ; div(
+        [6.0, 6.0, 6.0]; [3],
+        [2.0, 2.0, 2.0]; [3] => [3.0, 3.0, 3.0]
+    ));
+
+    test_binop_simple!(test_mul_mat ; mul_mat(
+        [1.0, 1.0, 2.0, 2.0]; [2, 2],
+        [2.0, 2.0]; [2]
+        => [4.0, 8.0]
+    ));
+
+    test_binop_simple!(test_scale ; scale(
+        [3.0, 3.0, 3.0]; [3],
+        [2.0]; [1] => [6.0, 6.0, 6.0]
+    ));
+
+    test_binop_simple!(test_repeat ; repeat(
+        [2.0, 3.0, 4.0, 5.0]; [2, 2],
+        [
+            1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0,
+        ]; [4, 4] =>
+        [
+            2.0, 3.0, 2.0, 3.0,
+            4.0, 5.0, 4.0, 5.0,
+            2.0, 3.0, 2.0, 3.0,
+            4.0, 5.0, 4.0, 5.0,
+        ]
+    ));
+}
