@@ -32,6 +32,10 @@ where
 }
 
 // FIXME: There should be a better way to do this.
+// FIXME: Should be a sealed trait?
+/// GGML matrix multiplication
+///
+/// **Note:: Not intended to be implemented by users.
 pub trait GMulMat<const LDIMS: usize, const RDIMS: usize>
 where
     Dim<LDIMS>: DimValid,
@@ -39,6 +43,27 @@ where
 {
     type Output;
 
+    /// Matrix multiplication of tensor `A` with tensor `B`.
+    /// Returns a new tensor.
+    ///
+    /// `a.mul_mat(b)` or `a ^ b`
+    ///
+    /// **Invariants**
+    /// 1. `A` and `B` must have the same shape with
+    ///    the exception of the second dimension.
+    /// 2. The result will have the minimum of the dimensions
+    ///    between `A` and `B`.
+    ///
+    /// **Example** (pseudocode):
+    /// ```rust
+    /// let a = [2, 2];
+    /// let b =
+    ///     [ [1, 1],
+    ///       [2, 2] ];
+    /// let expected = [6, 6];
+    /// let result = a.mul_mat(b);
+    /// assert_eq!(result, expected);
+    /// ```
     fn mul_mat<T: AsRef<GTensor<RDIMS>>>(&self, rhs: T) -> Self::Output;
 }
 

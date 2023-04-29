@@ -38,3 +38,17 @@ fn testes() {
 //     merp(derp::<1>);
 //     merp(derp::<2>);
 // }
+
+/// use std::ffi::c_int;
+unsafe extern "C" fn binary_map_fn(
+    aaaaaaaaaaaaaaaaan: c_int,
+    dst: *mut f32,
+    src0: *const f32,
+    src1: *const f32,
+) {
+    let dst = ::std::slice::from_raw_parts_mut(dst, n as usize);
+    let src = ::std::slice::from_raw_parts(src, n as usize);
+    dst.iter_mut()
+        .zip(src.iter().copied())
+        .for_each(|(dst, src0)| *dst = src + 10);
+}

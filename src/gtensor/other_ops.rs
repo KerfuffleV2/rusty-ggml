@@ -7,6 +7,9 @@ impl<const DIMS: usize> GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
+    /// # !!!! FIXME !!!!
+    /// # !!!! FIXME !!!!
+    /// # !!!! FIXME !!!!
     pub fn flash_attn<
         const KDIMS: usize,
         const VDIMS: usize,
@@ -48,6 +51,9 @@ where
         }
     }
 
+    /// # !!!! FIXME !!!!
+    /// # !!!! FIXME !!!!
+    /// # !!!! FIXME !!!!
     pub fn flash_ff<
         const B0DIMS: usize,
         const B1DIMS: usize,

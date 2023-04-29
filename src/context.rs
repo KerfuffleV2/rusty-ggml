@@ -59,20 +59,25 @@ pub struct GgmlContextBuilder {
 }
 
 impl GgmlContextBuilder {
+    /// Create a new [GgmlContextBuilder].
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set the GGML context size.
     pub fn mem_size(mut self, mem_size: usize) -> Self {
         self.mem_size = mem_size;
         self
     }
 
+    /// Tells GGML not to allocate memory itself.
     pub fn no_alloc(mut self, no_alloc: bool) -> Self {
         self.no_alloc = no_alloc;
         self
     }
 
+    /// Build a GGML context ([GContext]) based on the
+    /// builder's configuration.
     pub fn build(self) -> GContext {
         let ptr = unsafe {
             gg::ggml_init(gg::ggml_init_params {
@@ -90,6 +95,10 @@ impl GgmlContextBuilder {
 }
 
 impl GContext {
+    /// Create a new tensor with the specified [type](GType) and shape.
+    ///
+    /// This uses const generics to determine the new tensor's dimensions. The tensor dimensions
+    /// will be equal to the number of items in the `shape` array.
     pub fn tensor<const DIMS: usize>(&self, typ: GType, shape: [usize; DIMS]) -> GTensor<DIMS>
     where
         Dim<DIMS>: DimValid,
@@ -136,11 +145,13 @@ impl GContext {
         }
     }
 
+    /// Runs the supplied graph using this context.
     pub fn compute(&self, graph: &mut GgmlGraph) {
         let ctx = self.ictx.lock().expect("Failed to get context mutex");
         unsafe { gg::ggml_graph_compute(ctx.0.as_ptr(), &mut graph.0) }
     }
 
+    /// Returns the amount of memory GGML is currently using.
     pub fn used_mem(&self) -> usize {
         let ctx = self.ictx.lock().expect("Failed to get context mutex");
         unsafe { gg::ggml_used_mem(ctx.0.as_ptr()) }
@@ -151,6 +162,7 @@ impl GContext {
 pub struct GgmlGraph(gg::ggml_cgraph);
 
 impl GgmlGraph {
+    /// Create a new computation graph with the specified number of threads.
     pub fn new(n_threads: usize) -> Self {
         let mut graph = unsafe { std::mem::zeroed::<gg::ggml_cgraph>() };
         graph.n_threads = n_threads as i32;

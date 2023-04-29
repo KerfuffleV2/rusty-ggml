@@ -11,12 +11,26 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
+/// Metadata associated with a [GTensor].
 pub struct GTensorMetadata<const DIMS: usize> {
+    /// The type of tensor.
     pub typ: GType,
+
+    /// The associated GGML operation if available.
     pub op: gg::ggml_op,
+
+    /// The shape of the tensor.
     pub shape: [usize; DIMS],
+
+    /// The length in bytes.
     pub len_bytes: usize,
+
+    /// The number of elements.
     pub len_elements: usize,
+
+    /// The size of an individual element.
+    ///
+    /// **Note**: This may not be accurate for quantized types.
     pub element_size: usize,
 }
 
@@ -55,6 +69,7 @@ where
 // set state in tensor and context to indicate we're dead and
 // just allow other operations (except actually creating/runnning
 // the graph).
+/// A GGML tensor. It uses a const generic for the dimensions.
 pub struct GTensor<const DIMS: usize> {
     pub(crate) ctx: GContext,
     pub(crate) md: GTensorMetadata<DIMS>,
@@ -80,53 +95,88 @@ impl<const DIMS: usize> GTensor<DIMS>
 where
     Dim<DIMS>: DimValid,
 {
+    /// Alternate method to access a tensor's
+    /// dimensions without needing an actual [GTensor] value
+    /// to work with.
     pub const DIMS: usize = DIMS;
 
+    /// Return the number of dimensions for this tensor.
     pub fn dims(&self) -> usize {
         DIMS
     }
 
-    /// In bytes
+    /// Returns the tensor data length in bytes.
     pub fn len(&self) -> usize {
         self.md.len_bytes
     }
 
+    /// `true` if the tensor is empty.
     pub fn is_empty(&self) -> bool {
         self.md.len_bytes == 0
     }
 
+    /// Returns the number of elements in this tensor.
     pub fn elements(&self) -> usize {
         self.md.len_elements
     }
 
-    /// In bytes
+    /// Returns the number of bytes each element uses.
+    ///
+    /// **Note**: May not be accurate for quantized types.
     pub fn element_size(&self) -> usize {
         self.md.element_size
     }
 
+    /// Return the shape of this tensor as an array.
+    ///
+    /// **Note**: The length of the shape array will
+    /// be equal to the tensor's dimensions.
     pub fn shape(&self) -> [usize; DIMS] {
         self.md.shape
     }
 
+    /// Returns the GGML operation associated with this
+    /// tensor if available.
     pub fn ggml_op(&self) -> gg::ggml_op {
         self.md.op
     }
 
+    /// Returns the element type.
     pub fn element_type(&self) -> GType {
         self.md.typ
     }
 
+    /// Returns a copy of the metadata associated with this tensor.
     pub fn metadata(&self) -> GTensorMetadata<DIMS> {
         self.md.clone()
     }
 
+    /// Returns GGML's conception of this tensor's shape.
+    ///
+    /// **Note**: This is a low level function. Be aware that GGML
+    /// shapes have the first two dimensions swapped.
     pub fn get_ne(&self) -> [i64; 4] {
         let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
         unsafe { self.tptr.as_ref().ne }
     }
 
+    /// Returns GGML's conception of this tensor's strides.
+    ///
+    /// **Note**: This is a low level function. Be aware that GGML
+    /// shapes have the first two dimensions swapped. This also
+    /// applies to the order of strides.
+    pub fn get_nb(&self) -> [usize; 4] {
+        let _ctx = self.ctx.ictx.lock().expect("Failed to get context mutex");
+        unsafe { self.tptr.as_ref().nb }
+    }
+
+    /// Low level function that allows mutably accessing a tensor's
+    /// data as a slice of `u8`.
+    ///
     /// # Safety
-    /// Yeah right.
+    /// Since this is working with the raw bytes, you need to be careful
+    /// not to reinterpret as the wrong type or set the data to something
+    /// that would contain an invalid value for the type.
     pub unsafe fn with_data_mut<F, O>(&mut self, fun: F) -> O
     where
         F: FnOnce(&mut [u8]) -> O,
@@ -138,8 +188,12 @@ where
         ))
     }
 
+    /// Low level function that allows accessing a tensor's
+    /// data as a slice of `u8`.
+    ///
     /// # Safety
-    /// Yeah right.
+    /// Since this is working with the raw bytes, you need to be careful
+    /// not to reinterpret as the wrong type.
     pub unsafe fn with_data<F, O>(&self, fun: F) -> O
     where
         F: FnOnce(&[u8]) -> O,
@@ -218,6 +272,9 @@ where
     // Binary ops
     //
 
+    /// Copies data from the specified tensor into this tensor when the graph runs.
+    ///
+    /// **Note**: This overwrites `self` with the copy.
     pub fn copy_from<T: AsRef<GTensor<DIMS>>>(&mut self, rhs: T) {
         let nt = self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
             gg::ggml_cpy(ctx, rtptr, ltptr)
@@ -226,36 +283,71 @@ where
         *self = nt;
     }
 
+    /// Immediately fills the tensor's data with zeros.
     pub fn fill_zero(&mut self) {
         self.with_tensor(|_ctx, tptr| unsafe {
             let _ = gg::ggml_set_zero(tptr);
         })
     }
 
+    /// Immediately fills the tensor's data with the specified `i32`
+    /// value.
+    ///
+    /// **Invariants**
+    /// 1. The tensor's type must not be quantized.
     pub fn fill_i32(&mut self, val: i32) {
         self.with_tensor(|_ctx, tptr| unsafe {
             let _ = gg::ggml_set_i32(tptr, val);
         })
     }
 
+    /// Immediately fills the tensor's data with the specified `f32`
+    /// value.
+    ///
+    /// **Invariants**
+    /// 1. The tensor's type must not be quantized.
     pub fn fill_f32(&mut self, val: f32) {
         self.with_tensor(|_ctx, tptr| unsafe {
             let _ = gg::ggml_set_f32(tptr, val);
         })
     }
 
+    /// Immediately returns the value of an element at the
+    /// specified index as a `f32`.
+    ///
+    /// **Invariants**
+    /// 1. The tensor's type must not be quantized.
+    /// 2. The index must be valid.
     pub fn get_f32_1d(&self, index: usize) -> f32 {
         self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_get_f32_1d(tptr, index as i32) })
     }
 
+    /// Immediately returns the value of an element at the
+    /// specified index as an `i32`.
+    ///
+    /// **Invariants**
+    /// 1. The tensor's type must not be quantized.
+    /// 2. The index must be valid.
     pub fn get_i32_1d(&self, index: usize) -> i32 {
         self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_get_i32_1d(tptr, index as i32) })
     }
 
+    /// Immediately set the value of an element at the
+    /// specified index to the specified `f32` value.
+    ///
+    /// **Invariants**
+    /// 1. The tensor's type must not be quantized.
+    /// 2. The index must be valid.
     pub fn set_f32_1d(&mut self, index: usize, val: f32) {
         self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_set_f32_1d(tptr, index as i32, val) })
     }
 
+    /// Immediately set the value of an element at the
+    /// specified index to the specified `i32` value.
+    ///
+    /// **Invariants**
+    /// 1. The tensor's type must not be quantized.
+    /// 2. The index must be valid.
     pub fn set_i32_1d(&mut self, index: usize, val: i32) {
         self.with_tensor(|_ctx, tptr| unsafe { gg::ggml_set_i32_1d(tptr, index as i32, val) })
     }
@@ -276,6 +368,12 @@ where
     }
 
     // FIXME: More generic versions of these functions.
+    /// Immediately copy the specified `f32` values into this tensor.
+    ///
+    /// **Invariants**
+    /// 1. The tensor must be of type [GType::F32].
+    /// 2. The length of the incoming data must match the size of the
+    ///     tensor.
     pub fn populate_f32<S: AsRef<[f32]>>(&mut self, data: S) {
         let data = data.as_ref();
         assert_eq!(self.md.typ, GType::F32);
@@ -293,6 +391,13 @@ where
     }
 
     // FIXME: More generic versions of these functions.
+    /// Immediately copy the data from this tensor to the specified destination.
+    ///
+    /// **Invariants**
+    /// 1. The tensor must be of type [GType::F32].
+    /// 2. The length of the destination must match the size of the
+    ///     tensor.
+    /// 3. The destination must be elements of `f32`.
     pub fn copy_to_slice_f32<S: AsMut<[f32]>>(&self, mut dest: S) {
         let dest = dest.as_mut();
         let elements = self.elements();
@@ -310,12 +415,4 @@ where
             })
         }
     }
-
-    //
-    // Unary ops
-    //
-
-    //
-    // Other ops
-    //
 }

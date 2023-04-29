@@ -14,6 +14,7 @@ use ggml_sys_bleedingedge as gg;
     num_derive::FromPrimitive,
     num_derive::ToPrimitive,
 )]
+/// GGML element type. Items starting with `Q` generally will be quantized.
 pub enum GType {
     F32 = gg::ggml_type_GGML_TYPE_F32,
     F16 = gg::ggml_type_GGML_TYPE_F16,
@@ -29,21 +30,33 @@ pub enum GType {
 }
 
 impl GType {
+    /// Is this type quantized?
     pub fn is_quantized(&self) -> bool {
         self.to_u32()
             .map_or(false, |val| unsafe { gg::ggml_is_quantized(val) })
     }
 
+    /// Returns the element size for a type.
+    ///
+    /// **Note**: This may not be accurate for quantized types.
+    ///
+    /// A result of `0` indicates an error.
     pub fn element_size(&self) -> usize {
         self.to_u32()
             .map_or(0, |val| unsafe { gg::ggml_type_size(val) })
     }
 
+    /// Returns the element size for a type as a float. This
+    /// can provide a more accurate result for quantized types.
+    ///
+    /// A result of `0.0` indicates an error.
     pub fn element_sizef(&self) -> f32 {
         self.to_u32()
             .map_or(0.0, |val| unsafe { gg::ggml_type_sizef(val) })
     }
 
+    /// Returns the block size for this type. Generally always `1` for
+    /// non-quantized types.
     pub fn block_size(&self) -> usize {
         self.to_u32()
             .map_or(0, |val| unsafe { gg::ggml_blck_size(val) } as usize)

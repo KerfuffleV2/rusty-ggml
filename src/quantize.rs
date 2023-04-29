@@ -24,10 +24,21 @@ pub struct GQuantizer {
 impl GQuantizer {
     pub const QUANTIZE_HISTOGRAM_SIZE: usize = 16;
 
+    /// Fetches the current histogram.
     pub fn histogram(&self) -> [i64; Self::QUANTIZE_HISTOGRAM_SIZE] {
         self.hist
     }
 
+    /// Reset the histogram.
+    pub fn reset_histogram(&mut self) {
+        self.hist.iter_mut().for_each(|i| *i = 0);
+    }
+
+    /// Quantizes the input `[f32]` slice with the specified type and returns a reference to this
+    /// [GQuantizer]'s internal buffer.
+    ///
+    /// **WARNING**: The return value is only valid while the [GQuantizer] it came from is alive
+    /// (lifetimes should ensure this) _and_ until the next time you call the `quantize` method.
     pub fn quantize(&mut self, typ: GType, input: &[f32]) -> Result<&[u8]> {
         ensure!(typ.is_quantized(), GQuantizeError::UnquantizableType(typ));
         self.buffer.clear();
