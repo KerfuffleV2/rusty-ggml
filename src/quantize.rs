@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::{ggml_sys, util::GType};
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error, Clone, PartialEq)]
 pub enum GQuantizeError {
     #[error("Cannot quantize type {0:?}")]
     UnquantizableType(GType),

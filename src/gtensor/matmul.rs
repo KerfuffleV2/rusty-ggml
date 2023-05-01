@@ -75,8 +75,12 @@ where
     type Output = GTensor<DIMS>;
 
     fn mul_mat<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self::Output {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_mul_mat(ctx, ltptr, rtptr)
+        let rmd = rhs.as_ref().md.clone();
+        self.new_binary(rhs, |ctx, ltptr, rtptr| {
+            if !self.md.can_mul_mat_with(&rmd) {
+                Err(GTensorError::InvalidOperation)?;
+            }
+            unsafe { Ok(gg::ggml_mul_mat(ctx, ltptr, rtptr)) }
         })
     }
 }
@@ -88,8 +92,14 @@ macro_rules! mk_gmulmatinstances {
             type Output = GTensor<$o>;
 
             fn mul_mat<T: AsRef<GTensor<$r>>>(&self, rhs: T) -> Self::Output {
-                self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-                    gg::ggml_mul_mat(ctx, ltptr, rtptr)
+                let rmd = rhs.as_ref().md.clone();
+                self.new_binary(rhs, |ctx, ltptr, rtptr| {
+                    if !self.md.can_mul_mat_with(&rmd) {
+                        Err(GTensorError::InvalidOperation)?;
+                    }
+                    unsafe {
+                        Ok(gg::ggml_mul_mat(ctx, ltptr, rtptr))
+                    }
                 })
             }
         }

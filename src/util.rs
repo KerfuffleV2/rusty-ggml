@@ -1,6 +1,17 @@
 use num_traits::ToPrimitive;
+use thiserror::Error;
 
 use ggml_sys_bleedingedge as gg;
+
+#[derive(Debug, Error, Clone, PartialEq)]
+pub enum GError {
+    #[error("Quantization error: {0}")]
+    Quantization(crate::quantize::GQuantizeError),
+    #[error("Context error: {0}")]
+    Context(crate::context::GContextError),
+    #[error("Tensor error: {0}")]
+    Tensor(crate::gtensor::GTensorError),
+}
 
 #[repr(u32)]
 #[derive(

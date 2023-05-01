@@ -1,7 +1,7 @@
 use ggml_sys_bleedingedge as gg;
 
 use super::tensor::*;
-use crate::dims::*;
+use crate::{dims::*, util::GType};
 
 #[macro_export]
 /// Creates an anonymous function for use with [GTensor::map_unary].
@@ -100,7 +100,12 @@ where
         &self,
         fun: unsafe extern "C" fn(arg1: ::std::os::raw::c_int, arg2: *mut f32, arg3: *const f32),
     ) -> Self {
-        self.new_unary(|ctx, tptr| unsafe { gg::ggml_map_unary_f32(ctx, tptr, Some(fun)) })
+        self.new_unary(|ctx, tptr| {
+            if self.md.typ != GType::F32 {
+                Err(GTensorError::TypeMismatch)?;
+            }
+            unsafe { Ok(gg::ggml_map_unary_f32(ctx, tptr, Some(fun))) }
+        })
     }
 
     /// Elementwise binary map operation on tensors `A` and `B`.
@@ -150,8 +155,13 @@ where
             arg4: *const f32,
         ),
     ) -> Self {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_map_binary_f32(ctx, ltptr, rtptr, Some(fun))
+        let rtyp = rhs.as_ref().md.typ;
+        self.new_binary(rhs, |ctx, ltptr, rtptr| {
+            //
+            if self.md.typ != GType::F32 || rtyp != GType::F32 {
+                Err(GTensorError::TypeMismatch)?;
+            }
+            unsafe { Ok(gg::ggml_map_binary_f32(ctx, ltptr, rtptr, Some(fun))) }
         })
     }
 }

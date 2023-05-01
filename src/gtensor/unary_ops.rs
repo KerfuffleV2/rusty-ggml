@@ -7,7 +7,7 @@ macro_rules! mk_simple_uops {
   ( $($(#[$attr:meta])* [$opname:ident, $gfname:ident]),* $(,)? ) => { $(
     $(#[$attr])*
     pub fn $opname(&self) -> Self {
-        self.new_unary(|ctx, tptr| unsafe { gg::$gfname(ctx, tptr) })
+        self.new_unary(|ctx, tptr| unsafe { Ok(gg::$gfname(ctx, tptr)) })
     }
   )* }
 }
@@ -244,7 +244,7 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimLt,
     {
-        self.new_unary(|ctx, tptr| unsafe { gg::ggml_mean(ctx, tptr) })
+        self.new_unary(|ctx, tptr| unsafe { Ok(gg::ggml_mean(ctx, tptr)) })
     }
 
     /// Elementwise `sum` of tensor `A`.
@@ -267,7 +267,7 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimLt,
     {
-        self.new_unary(|ctx, tptr| unsafe { gg::ggml_sum(ctx, tptr) })
+        self.new_unary(|ctx, tptr| unsafe { Ok(gg::ggml_sum(ctx, tptr)) })
     }
 
     /// # !!!! FIXME !!!!
@@ -280,11 +280,11 @@ where
         DimPair<ODIMS, 4>: DimLt,
     {
         self.new_unary(|ctx, tptr| unsafe {
-            match ODIMS {
+            Ok(match ODIMS {
                 2 => gg::ggml_reshape_2d(ctx, tptr, ne[1] as i64, ne[0] as i64),
                 3 => gg::ggml_reshape_3d(ctx, tptr, ne[1] as i64, ne[0] as i64, ne[2] as i64),
-                _ => panic!("Bad reshape dimension!"),
-            }
+                _ => Err(GTensorError::InvalidOperation)?,
+            })
         })
     }
 
@@ -302,7 +302,7 @@ where
     {
         self.new_unary(|ctx, tptr| unsafe {
             let elsize = gg::ggml_element_size(tptr);
-            match ODIMS {
+            Ok(match ODIMS {
                 1 => gg::ggml_view_1d(ctx, tptr, ne[0], elsize * offset[0]),
                 2 => gg::ggml_view_2d(
                     ctx,
@@ -322,8 +322,8 @@ where
                     elsize * offset[0],
                     elsize * offset[2],
                 ),
-                _ => panic!("Bad view dimension!"),
-            }
+                _ => Err(GTensorError::InvalidOperation)?,
+            })
         })
     }
 
@@ -331,7 +331,7 @@ where
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     pub fn diag_mask_inf(self, val: usize) -> Self {
-        self.new_unary(|ctx, tptr| unsafe { gg::ggml_diag_mask_inf(ctx, tptr, val as i32) })
+        self.new_unary(|ctx, tptr| unsafe { Ok(gg::ggml_diag_mask_inf(ctx, tptr, val as i32)) })
     }
 
     /// # !!!! FIXME !!!!
@@ -339,7 +339,13 @@ where
     /// # !!!! FIXME !!!!
     pub fn rope(self, n_past: usize, n_dims: usize, mode: usize) -> Self {
         self.new_unary(|ctx, tptr| unsafe {
-            gg::ggml_rope(ctx, tptr, n_past as i32, n_dims as i32, mode as i32)
+            Ok(gg::ggml_rope(
+                ctx,
+                tptr,
+                n_past as i32,
+                n_dims as i32,
+                mode as i32,
+            ))
         })
     }
 }
@@ -347,6 +353,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{context::*, util::GType};
+    use anyhow::Result;
 
     macro_rules! test_uop_simple {
         (
@@ -356,18 +363,19 @@ mod tests {
              $expect:expr
         ) ) => {
             #[test]
-            pub fn $fname() {
+            pub fn $fname() -> Result<()> {
                 let expect = $expect;
                 let mut output = expect.clone();
-                let ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
-                let mut g = GgmlGraph::new(1);
-                let mut t = ctx.tensor(GType::F32, $shape);
+                let ctx = GContextBuilder::new().mem_size(1024 * 1024).build()?;
+                let mut g = GGraph::new(1);
+                let mut t = ctx.tensor(GType::F32, $shape)?;
                 t.populate_f32($input);
                 let t2 = t.$meth();
-                g.build_forward_expand(&t2);
-                ctx.compute(&mut g);
+                g.build_forward_expand(&t2)?;
+                ctx.compute(&mut g)?;
                 t2.copy_to_slice_f32(&mut output);
                 assert_eq!(output, expect);
+                Ok(())
             }
         };
     }

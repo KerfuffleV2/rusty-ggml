@@ -10,7 +10,7 @@ macro_rules! mk_simple_bops {
     $(#[$attr])*
     pub fn $opname<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::$gfname(ctx, ltptr, rtptr)
+            Ok(gg::$gfname(ctx, ltptr, rtptr))
         })
     }
   )* }
@@ -144,7 +144,7 @@ where
         DimPair<1, RDIMS>: DimEq,
     {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_scale(ctx, ltptr, rtptr)
+            Ok(gg::ggml_scale(ctx, ltptr, rtptr))
         })
     }
 
@@ -187,7 +187,7 @@ where
         DimPair<RDIMS, 3>: DimLt,
     {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_repeat(ctx, ltptr, rtptr)
+            Ok(gg::ggml_repeat(ctx, ltptr, rtptr))
         })
     }
 
@@ -214,11 +214,11 @@ where
         DimPair<STRIDE, 3>: DimLt,
     {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            if STRIDE == 1 {
+            Ok(if STRIDE == 1 {
                 gg::ggml_conv_1d_1s(ctx, ltptr, rtptr)
             } else {
                 gg::ggml_conv_1d_2s(ctx, ltptr, rtptr)
-            }
+            })
         })
     }
 
@@ -249,14 +249,14 @@ where
     /// ```
     pub fn permute(&self, axes: [usize; 4]) -> Self {
         self.new_unary(|ctx, tptr| unsafe {
-            gg::ggml_permute(
+            Ok(gg::ggml_permute(
                 ctx,
                 tptr,
                 axes[1] as i32,
                 axes[0] as i32,
                 axes[2] as i32,
                 axes[3] as i32,
-            )
+            ))
         })
     }
 
@@ -271,7 +271,7 @@ where
         Dim<RDIMS>: DimValid,
     {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_reshape(ctx, ltptr, rtptr)
+            Ok(gg::ggml_reshape(ctx, ltptr, rtptr))
         })
     }
 
@@ -290,7 +290,7 @@ where
         DimPair<ODIMS, 2>: DimEq,
     {
         self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            gg::ggml_get_rows(ctx, ltptr, rtptr)
+            Ok(gg::ggml_get_rows(ctx, ltptr, rtptr))
         })
     }
 }
@@ -300,6 +300,7 @@ mk_gopinstances!((Add, add), (Sub, sub), (Mul, mul), (Div, div));
 #[cfg(test)]
 mod tests {
     use crate::{context::*, gtensor::GMulMat, util::GType};
+    use anyhow::Result;
 
     macro_rules! test_binop_simple {
         (
@@ -311,20 +312,21 @@ mod tests {
              $expect:expr
         ) ) => {
             #[test]
-            pub fn $fname() {
+            pub fn $fname() -> Result<()> {
                 let expect = $expect;
                 let mut output = expect.clone();
-                let ctx = GgmlContextBuilder::new().mem_size(1024 * 1024).build();
-                let mut g = GgmlGraph::new(1);
-                let mut ta = ctx.tensor(GType::F32, $shape_a);
+                let ctx = GContextBuilder::new().mem_size(1024 * 1024).build()?;
+                let mut g = GGraph::new(1);
+                let mut ta = ctx.tensor(GType::F32, $shape_a)?;
                 ta.populate_f32($input_a);
-                let mut tb = ctx.tensor(GType::F32, $shape_b);
+                let mut tb = ctx.tensor(GType::F32, $shape_b)?;
                 tb.populate_f32($input_b);
                 let t2 = ta.$meth(tb);
-                g.build_forward_expand(&t2);
-                ctx.compute(&mut g);
+                g.build_forward_expand(&t2)?;
+                ctx.compute(&mut g)?;
                 t2.copy_to_slice_f32(&mut output);
                 assert_eq!(output, expect);
+                Ok(())
             }
         };
     }
