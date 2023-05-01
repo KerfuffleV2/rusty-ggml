@@ -8,18 +8,14 @@ use std::{
     },
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use thiserror::Error;
 
 use ggml_sys_bleedingedge as gg;
 
-use crate::{
-    dims::*,
-    gtensor::GTensor,
-    util::{GError, GType},
-};
+use crate::{dims::*, gtensor::GTensor, util::GType};
 
-#[derive(Debug, Error, Clone, PartialEq)]
+#[derive(Debug, Error, Clone)]
 pub enum GContextError {
     #[error("Attempt to set invalid scratch buffer id {0}")]
     InvalidScratchBufferId(usize),
@@ -28,7 +24,7 @@ pub enum GContextError {
     MutexFailure,
 
     #[error("Context is deceased: {0}")]
-    DeadContext(Box<crate::util::GError>),
+    DeadContext(Arc<anyhow::Error>),
 
     #[error("Unknown error (likely mutex acquisition failure)")]
     Unknown,
@@ -43,7 +39,7 @@ pub enum GContextError {
     TensorCreationFailed,
 
     #[error("General error: {0}")]
-    General(Box<crate::util::GError>),
+    General(Arc<anyhow::Error>),
 }
 
 pub(crate) struct IContext {
@@ -61,7 +57,7 @@ pub(crate) struct IContext {
 
     // Populated if an error occurred during some previous
     // operation.
-    pub(crate) failed: Option<crate::util::GError>,
+    pub(crate) failed: Option<Arc<anyhow::Error>>,
 }
 
 impl Drop for IContext {
@@ -185,24 +181,27 @@ impl GContextBuilder {
 }
 
 impl GContext {
-    pub(crate) fn with_icontext<OUT, F>(&self, fun: F) -> Result<OUT, GContextError>
+    pub(crate) fn with_icontext<OUT, F>(&self, fun: F) -> Result<OUT>
     where
-        F: FnOnce(MutexGuard<IContext>) -> Result<OUT, GContextError>,
+        F: FnOnce(MutexGuard<IContext>) -> Result<OUT>,
     {
         let failed = self.dead.load(atomic::Ordering::SeqCst);
-        let ctx = self.ictx.lock().map_err(|_e| GContextError::MutexFailure)?;
-        ctx.failed
-            .as_ref()
-            .map_or(Ok(()), |e| Err(GContextError::General(Box::new(e.clone()))))?;
+        let ctx = self
+            .ictx
+            .lock()
+            .map_err(|_e| anyhow!(GContextError::MutexFailure))?;
+        if let Some(e) = ctx.failed.clone() {
+            bail!(GContextError::DeadContext(e));
+        }
         if failed {
-            Err(GContextError::Unknown)
+            bail!(GContextError::Unknown)
         } else {
             fun(ctx)
         }
     }
 
     // FIXME: This logic seems kind of weird. Same problem in `Tensor::with_tensor_infallible`.
-    pub(crate) fn with_icontext_infallible<OUT, F>(&self, fun: F) -> Result<OUT, GContextError>
+    pub(crate) fn with_icontext_infallible<OUT, F>(&self, fun: F) -> Result<OUT>
     where
         F: FnOnce(MutexGuard<IContext>) -> OUT,
     {
@@ -211,9 +210,9 @@ impl GContext {
             self.dead.store(true, atomic::Ordering::SeqCst);
             GContextError::MutexFailure
         })?;
-        ctx.failed
-            .as_ref()
-            .map_or(Ok(()), |e| Err(GContextError::General(Box::new(e.clone()))))?;
+        if let Some(e) = ctx.failed.clone() {
+            bail!(GContextError::DeadContext(e));
+        }
         // This might look weird but the idea is that we might have failed previously
         // due to being unable to acquire the mutex. Since we didn't have the mutex,
         // naturally it was impossible to set the `failed` field inside the `IContext`
@@ -221,7 +220,7 @@ impl GContext {
         // There probably still is a race condition here but it should be very unlikely.
         if failed {
             let e = GContextError::Unknown;
-            ctx.failed = Some(GError::Context(e.clone()));
+            ctx.failed = Some(Arc::new(anyhow::Error::new(e.clone())));
             Err(e)?;
         }
         Ok(fun(ctx))
@@ -230,14 +229,14 @@ impl GContext {
     pub(crate) fn delay_failure_with_icontext<OUT, DF, F>(&self, dfun: DF, fun: F) -> OUT
     where
         DF: Fn() -> OUT,
-        F: FnOnce(&MutexGuard<IContext>) -> Result<OUT, GContextError>,
+        F: FnOnce(&MutexGuard<IContext>) -> Result<OUT>,
     {
         self.with_icontext_infallible(|mut ictx| {
             fun(&ictx).unwrap_or_else(|e| {
                 // We have the context mutex but the handler function returned
                 // an error condition. So store the error in the context and mark it as dead.
                 self.dead.store(true, atomic::Ordering::SeqCst);
-                ictx.failed = Some(GError::Context(e));
+                ictx.failed = Some(Arc::new(e));
                 dfun()
             })
         })
@@ -256,7 +255,7 @@ impl GContext {
         &self,
         typ: GType,
         shape: [usize; DIMS],
-    ) -> Result<GTensor<DIMS>, GContextError>
+    ) -> Result<GTensor<DIMS>>
     where
         Dim<DIMS>: DimValid,
         DimPair<DIMS, 4>: DimLt,
@@ -322,7 +321,7 @@ impl GContext {
 
     /// Register a scratch buffer. The return value is the scratch buffer id
     /// which can be used with [Self::set_scratch_buffer].
-    pub fn register_scratch_buffer(&mut self, buf: ScratchBuffer) -> Result<usize, GContextError> {
+    pub fn register_scratch_buffer(&mut self, buf: ScratchBuffer) -> Result<usize> {
         self.with_icontext_infallible(|mut ictx| {
             let bufid = ictx.scratch_buffers.len();
             ictx.scratch_buffers.push(buf);
@@ -335,7 +334,7 @@ impl GContext {
     ///
     /// **Note**: Scratch buffers cannot be removed directly and are only freed
     /// when the [GContext] structure is dropped.
-    pub fn set_scratch_buffer(&self, maybebufid: Option<usize>) -> Result<(), GContextError> {
+    pub fn set_scratch_buffer(&self, maybebufid: Option<usize>) -> Result<()> {
         self.with_icontext(|mut ictx| {
             let (size, data) = if let Some(bufid) = maybebufid {
                 if bufid >= ictx.scratch_buffers.len() {
@@ -362,14 +361,14 @@ impl GContext {
     }
 
     /// Runs the supplied graph using this context.
-    pub fn compute(&self, graph: &mut GGraph) -> Result<(), GContextError> {
+    pub fn compute(&self, graph: &mut GGraph) -> Result<()> {
         self.with_icontext_infallible(|ictx| unsafe {
             gg::ggml_graph_compute(ictx.gctx.as_ptr(), &mut graph.0)
         })
     }
 
     /// Returns the amount of memory GGML is currently using.
-    pub fn used_mem(&self) -> Result<usize, GContextError> {
+    pub fn used_mem(&self) -> Result<usize> {
         self.with_icontext_infallible(|ictx| {
             if ictx.has_objects {
                 unsafe { gg::ggml_used_mem(ictx.gctx.as_ptr()) }
@@ -395,7 +394,7 @@ impl GGraph {
     pub fn build_forward_expand<const DIMS: usize, T: AsRef<GTensor<DIMS>>>(
         &mut self,
         tensor: T,
-    ) -> Result<(), GError>
+    ) -> Result<()>
     where
         Dim<DIMS>: DimValid,
     {
@@ -404,6 +403,5 @@ impl GGraph {
             .with_tensor_infallible(|_ictx, tptr| unsafe {
                 gg::ggml_build_forward_expand(&mut self.0, tptr)
             })
-            .map_err(GError::Tensor)
     }
 }

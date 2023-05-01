@@ -1,4 +1,7 @@
-use std::{ptr::NonNull, sync::atomic::Ordering::SeqCst};
+use std::{
+    ptr::NonNull,
+    sync::{atomic::Ordering::SeqCst, Arc},
+};
 
 use anyhow::Result;
 use num_traits::FromPrimitive;
@@ -6,13 +9,9 @@ use thiserror::Error;
 
 use ggml_sys_bleedingedge as gg;
 
-use crate::{
-    context::{GContext, GContextError},
-    dims::*,
-    util::*,
-};
+use crate::{context::GContext, dims::*, util::*};
 
-#[derive(Debug, Error, Clone, PartialEq)]
+#[derive(Debug, Error, Clone)]
 pub enum GTensorError {
     #[error("Merp")]
     Merp,
@@ -23,7 +22,7 @@ pub enum GTensorError {
     #[error("Invalid tensor operation: invariants violated")]
     InvalidOperation,
     #[error("General error: {0}")]
-    General(Box<crate::util::GError>),
+    General(Arc<anyhow::Error>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -242,49 +241,37 @@ where
         }
     }
 
-    pub(crate) fn with_tensor<OUT, F>(&self, fun: F) -> Result<OUT, GTensorError>
+    pub(crate) fn with_tensor<OUT, F>(&self, fun: F) -> Result<OUT>
     where
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<OUT, GTensorError>,
+        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<OUT>,
     {
         self.ctx
-            .with_icontext(|ictx| {
-                fun(ictx.as_ptr(), self.tptr.as_ptr())
-                    .map_err(|e| GContextError::General(Box::new(GError::Tensor(e))))
-            })
-            .map_err(|e| GTensorError::General(Box::new(GError::Context(e))))
+            .with_icontext(|ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
     }
 
-    pub(crate) fn with_tensor_infallible<OUT, F>(&self, fun: F) -> Result<OUT, GTensorError>
+    pub(crate) fn with_tensor_infallible<OUT, F>(&self, fun: F) -> Result<OUT>
     where
         F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> OUT,
     {
         self.ctx
             .with_icontext_infallible(|ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
-            .map_err(|e| GTensorError::General(Box::new(GError::Context(e))))
     }
 
     pub(crate) fn with_tensor_delay_failure<OUT, DF, F>(&self, dfun: DF, fun: F) -> OUT
     where
         DF: Fn() -> OUT,
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<OUT, GTensorError>,
+        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<OUT>,
     {
-        self.ctx.delay_failure_with_icontext(dfun, |ictx| {
-            fun(ictx.as_ptr(), self.tptr.as_ptr())
-                .map_err(|e| GContextError::General(Box::new(GError::Tensor(e))))
-        })
+        self.ctx
+            .delay_failure_with_icontext(dfun, |ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
     }
 
     pub(crate) fn with_tensor_unit_delay_failure<F>(&self, fun: F)
     where
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<(), GTensorError>,
+        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<()>,
     {
-        self.ctx.delay_failure_with_icontext(
-            || (),
-            |ictx| {
-                fun(ictx.as_ptr(), self.tptr.as_ptr())
-                    .map_err(|e| GContextError::General(Box::new(GError::Tensor(e))))
-            },
-        )
+        self.ctx
+            .delay_failure_with_icontext(|| (), |ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
     }
 
     pub(crate) fn new_unary<const ODIMS: usize, F>(&self, fun: F) -> GTensor<ODIMS>
@@ -332,13 +319,7 @@ where
             || self.make_dead_clone(),
             |ictx| {
                 let (ctxp, ltptr, rtptr) = (ictx.as_ptr(), self.tptr.as_ptr(), rhs.tptr.as_ptr());
-                Ok(unsafe {
-                    GTensor::<ODIMS>::new_from_ptr(
-                        &self.ctx,
-                        fun(ctxp, ltptr, rtptr)
-                            .map_err(|e| GContextError::General(Box::new(GError::Tensor(e))))?,
-                    )
-                })
+                Ok(unsafe { GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, ltptr, rtptr)?) })
             },
         )
     }
@@ -475,7 +456,7 @@ where
     /// **Invariants**
     /// 1. The tensor's type must not be quantized.
     /// 2. The index must be valid.
-    pub fn get_f32_1d(&self, index: usize) -> Result<f32, GTensorError> {
+    pub fn get_f32_1d(&self, index: usize) -> Result<f32> {
         self.with_tensor(|_ctx, tptr| {
             if index >= self.md.len_elements {
                 Err(GTensorError::InvalidOperation)?
@@ -493,7 +474,7 @@ where
     /// **Invariants**
     /// 1. The tensor's type must not be quantized.
     /// 2. The index must be valid.
-    pub fn get_i32_1d(&self, index: usize) -> Result<i32, GTensorError> {
+    pub fn get_i32_1d(&self, index: usize) -> Result<i32> {
         self.with_tensor(|_ctx, tptr| {
             if index >= self.md.len_elements {
                 Err(GTensorError::InvalidOperation)?
@@ -560,7 +541,7 @@ where
     /// Since this is working with the raw bytes, you need to be careful
     /// not to reinterpret as the wrong type or set the data to something
     /// that would contain an invalid value for the type.
-    pub unsafe fn with_data_mut<F, O>(&mut self, fun: F) -> Result<O, GTensorError>
+    pub unsafe fn with_data_mut<F, O>(&mut self, fun: F) -> Result<O>
     where
         F: FnOnce(&mut [u8]) -> O,
     {
@@ -578,7 +559,7 @@ where
     /// # Safety
     /// Since this is working with the raw bytes, you need to be careful
     /// not to reinterpret as the wrong type.
-    pub unsafe fn with_data<F, O>(&self, fun: F) -> Result<O, GTensorError>
+    pub unsafe fn with_data<F, O>(&self, fun: F) -> Result<O>
     where
         F: FnOnce(&[u8]) -> O,
     {

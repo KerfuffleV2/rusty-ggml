@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use ggml_sys_bleedingedge as gg;
 
-#[derive(Debug, Error, Clone, PartialEq)]
+#[derive(Debug, Error, Clone)]
 pub enum GError {
     #[error("Quantization error: {0}")]
     Quantization(crate::quantize::GQuantizeError),
