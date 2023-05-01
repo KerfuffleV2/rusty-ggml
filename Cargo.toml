@@ -9,7 +9,7 @@ license = "MIT"
 resolver = "2"
 
 [dependencies]
-ggml-sys-bleedingedge = "=2305010134.0.0"
+ggml-sys-bleedingedge = "=2305011232.0.0"
 anyhow = "1"
 thiserror = "1"
 num-traits = "0.2"

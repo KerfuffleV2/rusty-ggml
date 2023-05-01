@@ -46,10 +46,6 @@ pub(crate) struct IContext {
     // Pointer to the GGML context.
     pub(crate) gctx: NonNull<gg::ggml_context>,
 
-    // Temporary workaround for `ggml_used_mem` segfaulting if called on
-    // a fresh context.
-    pub(crate) has_objects: bool,
-
     // List of scratch buffers. Only dropped when the `IContext` is
     // finally freed.
     pub(crate) scratch_buffers: Vec<ScratchBuffer>,
@@ -170,7 +166,6 @@ impl GContextBuilder {
             ptrval: ptr as usize,
             ictx: Arc::new(Mutex::new(IContext {
                 gctx: NonNull::new(ptr).unwrap(),
-                has_objects: false,
                 scratch_buffers: vec![],
                 current_scratch_buffer: None,
                 failed: None,
@@ -266,11 +261,7 @@ impl GContext {
         let required = (elsize * elcount).round() as usize;
 
         self.with_icontext(|mut ictx| {
-            let used_ctx = if ictx.has_objects {
-                unsafe { gg::ggml_used_mem(ictx.gctx.as_ptr()) }
-            } else {
-                0
-            };
+            let used_ctx = unsafe { gg::ggml_used_mem(ictx.gctx.as_ptr()) };
             if let Some(bufid) = ictx.current_scratch_buffer {
                 let sbuf = &ictx.scratch_buffers[bufid];
 
@@ -369,13 +360,7 @@ impl GContext {
 
     /// Returns the amount of memory GGML is currently using.
     pub fn used_mem(&self) -> Result<usize> {
-        self.with_icontext_infallible(|ictx| {
-            if ictx.has_objects {
-                unsafe { gg::ggml_used_mem(ictx.gctx.as_ptr()) }
-            } else {
-                0
-            }
-        })
+        self.with_icontext_infallible(|ictx| unsafe { gg::ggml_used_mem(ictx.gctx.as_ptr()) })
     }
 }
 
