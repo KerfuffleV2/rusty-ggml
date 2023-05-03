@@ -3,6 +3,7 @@ pub mod dims;
 pub mod gtensor;
 pub mod quantize;
 pub mod util;
+pub mod validation;
 
 pub mod prelude;
 

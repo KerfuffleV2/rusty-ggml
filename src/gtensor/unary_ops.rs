@@ -1,13 +1,18 @@
 use ggml_sys_bleedingedge as gg;
 
 use super::tensor::*;
-use crate::dims::*;
+use crate::{dims::*, validation::GMemoryRequest};
 
 macro_rules! mk_simple_uops {
   ( $($(#[$attr:meta])* [$opname:ident, $gfname:ident]),* $(,)? ) => { $(
     $(#[$attr])*
     pub fn $opname(&self) -> Self {
-        self.new_unary(|ctx, tptr| unsafe { Ok(gg::$gfname(ctx, tptr)) })
+        self.new_unary(|ctx, ictx, tptr| {
+            let md = GMemoryRequest::estimate_tensor_request_ictx(
+                ctx, ictx, self.md.typ, self.md.shape
+            ).fit_or_die()?;
+            unsafe { Ok(gg::$gfname(ictx.gptr(), tptr)) }
+        })
     }
   )* }
 }
@@ -244,7 +249,7 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimLt,
     {
-        self.new_unary(|ctx, tptr| unsafe { Ok(gg::ggml_mean(ctx, tptr)) })
+        self.new_unary(|ctx, ictx, tptr| unsafe { Ok(gg::ggml_mean(ictx.gptr(), tptr)) })
     }
 
     /// Elementwise `sum` of tensor `A`.
@@ -267,7 +272,7 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimLt,
     {
-        self.new_unary(|ctx, tptr| unsafe { Ok(gg::ggml_sum(ctx, tptr)) })
+        self.new_unary(|ctx, ictx, tptr| unsafe { Ok(gg::ggml_sum(ictx.gptr(), tptr)) })
     }
 
     /// # !!!! FIXME !!!!
@@ -279,10 +284,12 @@ where
         DimPair<ODIMS, 2>: DimGtE,
         DimPair<ODIMS, 4>: DimLt,
     {
-        self.new_unary(|ctx, tptr| unsafe {
+        self.new_unary(|ctx, ictx, tptr| unsafe {
             Ok(match ODIMS {
-                2 => gg::ggml_reshape_2d(ctx, tptr, ne[1] as i64, ne[0] as i64),
-                3 => gg::ggml_reshape_3d(ctx, tptr, ne[1] as i64, ne[0] as i64, ne[2] as i64),
+                2 => gg::ggml_reshape_2d(ictx.gptr(), tptr, ne[1] as i64, ne[0] as i64),
+                3 => {
+                    gg::ggml_reshape_3d(ictx.gptr(), tptr, ne[1] as i64, ne[0] as i64, ne[2] as i64)
+                }
                 _ => Err(GTensorError::InvalidOperation)?,
             })
         })
@@ -300,12 +307,12 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 3>: DimLt,
     {
-        self.new_unary(|ctx, tptr| unsafe {
+        self.new_unary(|ctx, ictx, tptr| unsafe {
             let elsize = gg::ggml_element_size(tptr);
             Ok(match ODIMS {
-                1 => gg::ggml_view_1d(ctx, tptr, ne[0], elsize * offset[0]),
+                1 => gg::ggml_view_1d(ictx.gptr(), tptr, ne[0], elsize * offset[0]),
                 2 => gg::ggml_view_2d(
-                    ctx,
+                    ictx.gptr(),
                     tptr,
                     ne[1],
                     ne[0],
@@ -313,7 +320,7 @@ where
                     elsize * offset[0],
                 ),
                 3 => gg::ggml_view_3d(
-                    ctx,
+                    ictx.gptr(),
                     tptr,
                     ne[1],
                     ne[0],
@@ -331,16 +338,18 @@ where
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     pub fn diag_mask_inf(self, val: usize) -> Self {
-        self.new_unary(|ctx, tptr| unsafe { Ok(gg::ggml_diag_mask_inf(ctx, tptr, val as i32)) })
+        self.new_unary(|_ctx, ictx, tptr| unsafe {
+            Ok(gg::ggml_diag_mask_inf(ictx.gptr(), tptr, val as i32))
+        })
     }
 
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     pub fn rope(self, n_past: usize, n_dims: usize, mode: usize) -> Self {
-        self.new_unary(|ctx, tptr| unsafe {
+        self.new_unary(|_ctx, ictx, tptr| unsafe {
             Ok(gg::ggml_rope(
-                ctx,
+                ictx.gptr(),
                 tptr,
                 n_past as i32,
                 n_dims as i32,
@@ -373,7 +382,7 @@ mod tests {
                 let t2 = t.$meth();
                 g.build_forward_expand(&t2)?;
                 ctx.compute(&mut g)?;
-                t2.copy_to_slice_f32(&mut output);
+                t2.copy_to_slice_f32(&mut output)?;
                 assert_eq!(output, expect);
                 Ok(())
             }

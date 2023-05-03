@@ -3,14 +3,17 @@ use std::ops;
 use ggml_sys_bleedingedge as gg;
 
 use super::tensor::*;
-use crate::dims::*;
+use crate::{dims::*, util::GType, validation::*};
 
 macro_rules! mk_simple_bops {
   ( $( $(#[$attr:meta])* [$opname:ident, $gfname:ident]),* $(,)? ) => { $(
     $(#[$attr])*
     pub fn $opname<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(gg::$gfname(ctx, ltptr, rtptr))
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(
+                ctx, ictx, self.md.typ, self.md.shape
+            );
+            Ok(unsafe { gg::$gfname(ictx.gptr(), ltptr, rtptr) })
         })
     }
   )* }
@@ -143,8 +146,9 @@ where
         Dim<RDIMS>: DimValid,
         DimPair<1, RDIMS>: DimEq,
     {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(gg::ggml_scale(ctx, ltptr, rtptr))
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape);
+            Ok(unsafe { gg::ggml_scale(ictx.gptr(), ltptr, rtptr) })
         })
     }
 
@@ -186,8 +190,10 @@ where
         DimPair<DIMS, 3>: DimLt,
         DimPair<RDIMS, 3>: DimLt,
     {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(gg::ggml_repeat(ctx, ltptr, rtptr))
+        let rmd = rhs.as_ref().md.clone();
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, rmd.shape);
+            Ok(unsafe { gg::ggml_repeat(ictx.gptr(), ltptr, rtptr) })
         })
     }
 
@@ -213,11 +219,14 @@ where
         DimPair<STRIDE, 1>: DimGtE,
         DimPair<STRIDE, 3>: DimLt,
     {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(if STRIDE == 1 {
-                gg::ggml_conv_1d_1s(ctx, ltptr, rtptr)
-            } else {
-                gg::ggml_conv_1d_2s(ctx, ltptr, rtptr)
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape);
+            Ok(unsafe {
+                if STRIDE == 1 {
+                    gg::ggml_conv_1d_1s(ictx.gptr(), ltptr, rtptr)
+                } else {
+                    gg::ggml_conv_1d_2s(ictx.gptr(), ltptr, rtptr)
+                }
             })
         })
     }
@@ -248,9 +257,9 @@ where
     /// assert_eq!(result, expected);
     /// ```
     pub fn permute(&self, axes: [usize; 4]) -> Self {
-        self.new_unary(|ctx, tptr| unsafe {
+        self.new_unary(|ctx, ictx, tptr| unsafe {
             Ok(gg::ggml_permute(
-                ctx,
+                ictx.gptr(),
                 tptr,
                 axes[1] as i32,
                 axes[0] as i32,
@@ -270,8 +279,10 @@ where
     where
         Dim<RDIMS>: DimValid,
     {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(gg::ggml_reshape(ctx, ltptr, rtptr))
+        let rmd = rhs.as_ref().md.clone();
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, rmd.shape);
+            Ok(unsafe { gg::ggml_reshape(ictx.gptr(), ltptr, rtptr) })
         })
     }
 
@@ -289,8 +300,15 @@ where
         DimPair<RDIMS, 2>: DimLt,
         DimPair<ODIMS, 2>: DimEq,
     {
-        self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(gg::ggml_get_rows(ctx, ltptr, rtptr))
+        let rmd = rhs.as_ref().md.clone();
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(
+                ctx,
+                ictx,
+                GType::F32,
+                [self.md.shape[1], rmd.shape[0]],
+            );
+            Ok(unsafe { gg::ggml_get_rows(ictx.gptr(), ltptr, rtptr) })
         })
     }
 }
@@ -315,7 +333,10 @@ mod tests {
             pub fn $fname() -> Result<()> {
                 let expect = $expect;
                 let mut output = expect.clone();
-                let ctx = GContextBuilder::new().mem_size(1024 * 1024).build()?;
+                // let ctx = GContextBuilder::new().mem_size(1024 * 1024).build()?;
+                let ctx = GContextBuilder::new().mem_size(752).build()?;
+                // let bid = ctx.register_scratch_buffer(ScratchBuffer::new(200))?;
+                // ctx.set_scratch_buffer(Some(bid))?;
                 let mut g = GGraph::new(1);
                 let mut ta = ctx.tensor(GType::F32, $shape_a)?;
                 ta.populate_f32($input_a);
@@ -324,7 +345,7 @@ mod tests {
                 let t2 = ta.$meth(tb);
                 g.build_forward_expand(&t2)?;
                 ctx.compute(&mut g)?;
-                t2.copy_to_slice_f32(&mut output);
+                t2.copy_to_slice_f32(&mut output)?;
                 assert_eq!(output, expect);
                 Ok(())
             }

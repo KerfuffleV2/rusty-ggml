@@ -3,13 +3,18 @@ use std::{
     sync::{atomic::Ordering::SeqCst, Arc},
 };
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use num_traits::FromPrimitive;
 use thiserror::Error;
 
 use ggml_sys_bleedingedge as gg;
 
-use crate::{context::GContext, dims::*, util::*};
+use crate::{
+    context::{GContext, GContextError, IContext},
+    dims::*,
+    util::*,
+    validation::*,
+};
 
 #[derive(Debug, Error, Clone)]
 pub enum GTensorError {
@@ -243,48 +248,47 @@ where
 
     pub(crate) fn with_tensor<OUT, F>(&self, fun: F) -> Result<OUT>
     where
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<OUT>,
+        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<OUT>,
     {
         self.ctx
-            .with_icontext(|ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
+            .with_icontext(|ctx, ictx| fun(ctx, &ictx, self.tptr.as_ptr()))
     }
 
     pub(crate) fn with_tensor_infallible<OUT, F>(&self, fun: F) -> Result<OUT>
     where
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> OUT,
+        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> OUT,
     {
         self.ctx
-            .with_icontext_infallible(|ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
+            .with_icontext_infallible(|ictx| fun(&self.ctx, &ictx, self.tptr.as_ptr()))
     }
 
     pub(crate) fn with_tensor_delay_failure<OUT, DF, F>(&self, dfun: DF, fun: F) -> OUT
     where
         DF: Fn() -> OUT,
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<OUT>,
+        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<OUT>,
     {
         self.ctx
-            .delay_failure_with_icontext(dfun, |ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
+            .delay_failure_with_icontext(dfun, |ictx| fun(&self.ctx, ictx, self.tptr.as_ptr()))
     }
 
     pub(crate) fn with_tensor_unit_delay_failure<F>(&self, fun: F)
     where
-        F: FnOnce(*mut gg::ggml_context, *mut gg::ggml_tensor) -> Result<()>,
+        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<()>,
     {
         self.ctx
-            .delay_failure_with_icontext(|| (), |ictx| fun(ictx.as_ptr(), self.tptr.as_ptr()))
+            .delay_failure_with_icontext(|| (), |ictx| fun(&self.ctx, ictx, self.tptr.as_ptr()))
     }
 
     pub(crate) fn new_unary<const ODIMS: usize, F>(&self, fun: F) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
-        F: FnOnce(
-            *mut gg::ggml_context,
-            *mut gg::ggml_tensor,
-        ) -> Result<*mut gg::ggml_tensor, GTensorError>,
+        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<*mut gg::ggml_tensor>,
     {
         self.with_tensor_delay_failure(
             || self.make_dead_clone(),
-            |ctxp, tptr| unsafe { Ok(GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, tptr)?)) },
+            |ctx, ictx, tptr| unsafe {
+                Ok(GTensor::<ODIMS>::new_from_ptr(ctx, fun(ctx, ictx, tptr)?))
+            },
         )
     }
 
@@ -298,10 +302,11 @@ where
         Dim<RDIMS>: DimValid,
         Dim<ODIMS>: DimValid,
         F: FnOnce(
-            *mut gg::ggml_context,
+            &GContext,
+            &IContext,
             *mut gg::ggml_tensor,
             *mut gg::ggml_tensor,
-        ) -> Result<*mut gg::ggml_tensor, GTensorError>,
+        ) -> Result<*mut gg::ggml_tensor>,
         T: AsRef<GTensor<RDIMS>>,
     {
         let rhs = rhs.as_ref();
@@ -318,8 +323,10 @@ where
         self.ctx.delay_failure_with_icontext(
             || self.make_dead_clone(),
             |ictx| {
-                let (ctxp, ltptr, rtptr) = (ictx.as_ptr(), self.tptr.as_ptr(), rhs.tptr.as_ptr());
-                Ok(unsafe { GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(ctxp, ltptr, rtptr)?) })
+                let (ltptr, rtptr) = (self.tptr.as_ptr(), rhs.tptr.as_ptr());
+                Ok(unsafe {
+                    GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(&self.ctx, ictx, ltptr, rtptr)?)
+                })
             },
         )
     }
@@ -410,8 +417,12 @@ where
 
     /// Immediately fills the tensor's data with zeros.
     pub fn fill_zero(&mut self) {
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| unsafe {
-            let _ = gg::ggml_set_zero(tptr);
+        self.with_tensor_unit_delay_failure(|ctx, _ictx, tptr| {
+            if !ctx.no_alloc {
+                unsafe {
+                    gg::ggml_set_zero(tptr);
+                }
+            }
             Ok(())
         })
     }
@@ -422,14 +433,17 @@ where
     /// **Invariants**
     /// 1. The tensor's type must not be quantized.
     pub fn fill_i32(&mut self, val: i32) {
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor_unit_delay_failure(|ctx, _ictx, tptr| {
             if self.md.typ.is_quantized() {
                 Err(GTensorError::TypeMismatch)?
             }
-            unsafe {
-                let _ = gg::ggml_set_i32(tptr, val);
-                Ok(())
+
+            if !ctx.no_alloc {
+                unsafe {
+                    gg::ggml_set_i32(tptr, val);
+                }
             }
+            Ok(())
         })
     }
 
@@ -439,14 +453,17 @@ where
     /// **Invariants**
     /// 1. The tensor's type must not be quantized.
     pub fn fill_f32(&mut self, val: f32) {
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor_unit_delay_failure(|ctx, _ictx, tptr| {
             if self.md.typ.is_quantized() {
                 Err(GTensorError::TypeMismatch)?
             }
-            unsafe {
-                let _ = gg::ggml_set_f32(tptr, val);
-                Ok(())
+
+            if !ctx.no_alloc {
+                unsafe {
+                    gg::ggml_set_f32(tptr, val);
+                }
             }
+            Ok(())
         })
     }
 
@@ -457,13 +474,14 @@ where
     /// 1. The tensor's type must not be quantized.
     /// 2. The index must be valid.
     pub fn get_f32_1d(&self, index: usize) -> Result<f32> {
-        self.with_tensor(|_ctx, tptr| {
+        self.with_tensor(|ctx, _ictx, tptr| {
             if index >= self.md.len_elements {
                 Err(GTensorError::InvalidOperation)?
             }
             if self.md.typ.is_quantized() {
                 Err(GTensorError::TypeMismatch)?
             }
+            ensure!(!ctx.no_alloc, GContextError::NoAlloc);
             Ok(unsafe { gg::ggml_get_f32_1d(tptr, index as i32) })
         })
     }
@@ -475,13 +493,14 @@ where
     /// 1. The tensor's type must not be quantized.
     /// 2. The index must be valid.
     pub fn get_i32_1d(&self, index: usize) -> Result<i32> {
-        self.with_tensor(|_ctx, tptr| {
+        self.with_tensor(|ctx, _ictx, tptr| {
             if index >= self.md.len_elements {
                 Err(GTensorError::InvalidOperation)?
             }
             if self.md.typ.is_quantized() {
                 Err(GTensorError::TypeMismatch)?
             }
+            ensure!(!ctx.no_alloc, GContextError::NoAlloc);
             Ok(unsafe { gg::ggml_get_i32_1d(tptr, index as i32) })
         })
     }
@@ -493,12 +512,15 @@ where
     /// 1. The tensor's type must not be quantized.
     /// 2. The index must be valid.
     pub fn set_f32_1d(&mut self, index: usize, val: f32) {
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor_unit_delay_failure(|_ctx, _ictx, tptr| {
             if index >= self.md.len_elements {
                 Err(GTensorError::InvalidOperation)?
             }
             if self.md.typ.is_quantized() {
                 Err(GTensorError::TypeMismatch)?
+            }
+            if self.ctx.no_alloc {
+                return Ok(());
             }
             unsafe { gg::ggml_set_f32_1d(tptr, index as i32, val) };
             Ok(())
@@ -512,12 +534,15 @@ where
     /// 1. The tensor's type must not be quantized.
     /// 2. The index must be valid.
     pub fn set_i32_1d(&mut self, index: usize, val: i32) {
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor_unit_delay_failure(|_ctx, _ictx, tptr| {
             if index >= self.md.len_elements {
                 Err(GTensorError::InvalidOperation)?
             }
             if self.md.typ.is_quantized() {
                 Err(GTensorError::TypeMismatch)?
+            }
+            if self.ctx.no_alloc {
+                return Ok(());
             }
             unsafe {
                 gg::ggml_set_i32_1d(tptr, index as i32, val);
@@ -545,7 +570,8 @@ where
     where
         F: FnOnce(&mut [u8]) -> O,
     {
-        self.with_tensor_infallible(|_ictx, tptr| {
+        ensure!(!self.ctx.no_alloc, GContextError::NoAlloc);
+        self.with_tensor_infallible(|_ctx, _ictx, tptr| {
             fun(std::slice::from_raw_parts_mut(
                 tptr.as_ref().unwrap().data as *mut u8,
                 self.md.len_bytes,
@@ -563,7 +589,8 @@ where
     where
         F: FnOnce(&[u8]) -> O,
     {
-        self.with_tensor_infallible(|_ictx, tptr| {
+        ensure!(!self.ctx.no_alloc, GContextError::NoAlloc);
+        self.with_tensor_infallible(|_ctx, _ictx, tptr| {
             fun(std::slice::from_raw_parts_mut(
                 tptr.as_ref().unwrap().data as *mut u8,
                 self.md.len_bytes,
@@ -575,12 +602,15 @@ where
     /// Fills a tensor with raw data. It's your responsibility to make sure the format is correct.
     pub unsafe fn populate_raw<S: AsRef<[u8]>>(&mut self, data: S) {
         let data = data.as_ref();
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor_unit_delay_failure(|ctx, _ictx, tptr| {
             if self.len() != data.len() {
                 Err(GTensorError::BadPopulate {
                     got: data.len(),
                     expected: self.len(),
                 })?
+            }
+            if ctx.no_alloc {
+                return Ok(());
             }
             let tref = tptr.as_ref().unwrap();
             (tref.data as *mut u8).copy_from_nonoverlapping(data.as_ptr(), data.len());
@@ -600,8 +630,9 @@ where
     ///
     /// **Note**: This immediately overwrites `self` with the copy.
     pub fn copy_from<T: AsRef<GTensor<DIMS>>>(&mut self, rhs: T) {
-        let nt = self.new_binary(rhs, |ctx, ltptr, rtptr| unsafe {
-            Ok(gg::ggml_cpy(ctx, rtptr, ltptr))
+        let nt = self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
+            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::F32, []);
+            Ok(unsafe { gg::ggml_cpy(ictx.gptr(), rtptr, ltptr) })
         });
 
         *self = nt;
@@ -616,7 +647,7 @@ where
     ///     tensor.
     pub fn populate_f32<S: AsRef<[f32]>>(&mut self, data: S) {
         let data = data.as_ref();
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor_unit_delay_failure(|ctx, _ictx, tptr| {
             if self.md.typ != GType::F32 {
                 Err(GTensorError::TypeMismatch)?
             }
@@ -625,6 +656,9 @@ where
                     got: data.len(),
                     expected: self.elements(),
                 })?
+            }
+            if ctx.no_alloc {
+                return Ok(());
             }
             unsafe {
                 let tref = tptr.as_ref().unwrap();
@@ -642,11 +676,11 @@ where
     /// 2. The length of the destination must match the size of the
     ///     tensor.
     /// 3. The destination must be elements of `f32`.
-    pub fn copy_to_slice_f32<S: AsMut<[f32]>>(&self, mut dest: S) {
+    pub fn copy_to_slice_f32<S: AsMut<[f32]>>(&self, mut dest: S) -> Result<()> {
         let dest = dest.as_mut();
         let elements = self.elements();
 
-        self.with_tensor_unit_delay_failure(|_ctx, tptr| {
+        self.with_tensor(|ctx, _ictx, tptr| {
             if self.md.typ != GType::F32 {
                 Err(GTensorError::TypeMismatch)?
             }
@@ -656,6 +690,7 @@ where
                     expected: elements,
                 })?
             }
+            ensure!(!ctx.no_alloc, GContextError::NoAlloc);
             let ts = unsafe {
                 std::slice::from_raw_parts(tptr.as_ref().unwrap().data as *const f32, elements)
             };

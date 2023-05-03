@@ -3,7 +3,7 @@ use std::ops;
 use ggml_sys_bleedingedge as gg;
 
 use super::tensor::*;
-use crate::dims::*;
+use crate::{dims::*, validation::*};
 
 impl<const DIMS: usize> GTensor<DIMS> where Dim<DIMS>: DimValid {}
 
@@ -76,11 +76,11 @@ where
 
     fn mul_mat<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self::Output {
         let rmd = rhs.as_ref().md.clone();
-        self.new_binary(rhs, |ctx, ltptr, rtptr| {
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
             if !self.md.can_mul_mat_with(&rmd) {
                 Err(GTensorError::InvalidOperation)?;
             }
-            unsafe { Ok(gg::ggml_mul_mat(ctx, ltptr, rtptr)) }
+            unsafe { Ok(gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr)) }
         })
     }
 }
@@ -93,12 +93,12 @@ macro_rules! mk_gmulmatinstances {
 
             fn mul_mat<T: AsRef<GTensor<$r>>>(&self, rhs: T) -> Self::Output {
                 let rmd = rhs.as_ref().md.clone();
-                self.new_binary(rhs, |ctx, ltptr, rtptr| {
+                self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
                     if !self.md.can_mul_mat_with(&rmd) {
                         Err(GTensorError::InvalidOperation)?;
                     }
                     unsafe {
-                        Ok(gg::ggml_mul_mat(ctx, ltptr, rtptr))
+                        Ok(gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr))
                     }
                 })
             }
