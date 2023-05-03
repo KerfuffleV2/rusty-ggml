@@ -10,10 +10,10 @@ macro_rules! mk_simple_bops {
     $(#[$attr])*
     pub fn $opname<T: AsRef<GTensor<DIMS>>>(&self, rhs: T) -> Self {
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(
                 ctx, ictx, self.md.typ, self.md.shape
-            );
-            Ok(unsafe { gg::$gfname(ictx.gptr(), ltptr, rtptr) })
+            ).fit_or_die()?;
+            Ok((mr, unsafe { gg::$gfname(ictx.gptr(), ltptr, rtptr) }))
         })
     }
   )* }
@@ -147,8 +147,10 @@ where
         DimPair<1, RDIMS>: DimEq,
     {
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape);
-            Ok(unsafe { gg::ggml_scale(ictx.gptr(), ltptr, rtptr) })
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape)
+                    .fit_or_die()?;
+            Ok((mr, unsafe { gg::ggml_scale(ictx.gptr(), ltptr, rtptr) }))
         })
     }
 
@@ -192,8 +194,10 @@ where
     {
         let rmd = rhs.as_ref().md.clone();
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, rmd.shape);
-            Ok(unsafe { gg::ggml_repeat(ictx.gptr(), ltptr, rtptr) })
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, rmd.shape)
+                    .fit_or_die()?;
+            Ok((mr, unsafe { gg::ggml_repeat(ictx.gptr(), ltptr, rtptr) }))
         })
     }
 
@@ -219,15 +223,23 @@ where
         DimPair<STRIDE, 1>: DimGtE,
         DimPair<STRIDE, 3>: DimLt,
     {
+        let rmd = rhs.as_ref().md.clone();
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape);
-            Ok(unsafe {
+            // FIXME: Double check this calculation.
+            let shp = match ODIMS {
+                2 => vec![self.md.ggml_ne[2] as usize, rmd.ggml_ne[1] as usize],
+                3 => vec![self.md.ggml_ne[2] as usize, rmd.ggml_ne[1] as usize / 2],
+                _ => Err(GTensorError::InvalidOperation)?,
+            };
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::F32, shp)
+                .fit_or_die()?;
+            Ok((mr, unsafe {
                 if STRIDE == 1 {
                     gg::ggml_conv_1d_1s(ictx.gptr(), ltptr, rtptr)
                 } else {
                     gg::ggml_conv_1d_2s(ictx.gptr(), ltptr, rtptr)
                 }
-            })
+            }))
         })
     }
 
@@ -257,15 +269,22 @@ where
     /// assert_eq!(result, expected);
     /// ```
     pub fn permute(&self, axes: [usize; 4]) -> Self {
-        self.new_unary(|ctx, ictx, tptr| unsafe {
-            Ok(gg::ggml_permute(
-                ictx.gptr(),
-                tptr,
-                axes[1] as i32,
-                axes[0] as i32,
-                axes[2] as i32,
-                axes[3] as i32,
-            ))
+        self.new_unary(|ctx, ictx, tptr| {
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, [])
+                .fit_or_die()?;
+            unsafe {
+                Ok((
+                    mr,
+                    gg::ggml_permute(
+                        ictx.gptr(),
+                        tptr,
+                        axes[1] as i32,
+                        axes[0] as i32,
+                        axes[2] as i32,
+                        axes[3] as i32,
+                    ),
+                ))
+            }
         })
     }
 
@@ -281,8 +300,10 @@ where
     {
         let rmd = rhs.as_ref().md.clone();
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, rmd.shape);
-            Ok(unsafe { gg::ggml_reshape(ictx.gptr(), ltptr, rtptr) })
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, rmd.shape)
+                    .fit_or_die()?;
+            Ok((mr, unsafe { gg::ggml_reshape(ictx.gptr(), ltptr, rtptr) }))
         })
     }
 
@@ -302,13 +323,14 @@ where
     {
         let rmd = rhs.as_ref().md.clone();
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(
                 ctx,
                 ictx,
                 GType::F32,
                 [self.md.shape[1], rmd.shape[0]],
-            );
-            Ok(unsafe { gg::ggml_get_rows(ictx.gptr(), ltptr, rtptr) })
+            )
+            .fit_or_die()?;
+            Ok((mr, unsafe { gg::ggml_get_rows(ictx.gptr(), ltptr, rtptr) }))
         })
     }
 }
@@ -333,9 +355,9 @@ mod tests {
             pub fn $fname() -> Result<()> {
                 let expect = $expect;
                 let mut output = expect.clone();
-                // let ctx = GContextBuilder::new().mem_size(1024 * 1024).build()?;
-                let ctx = GContextBuilder::new().mem_size(752).build()?;
-                // let bid = ctx.register_scratch_buffer(ScratchBuffer::new(200))?;
+                let ctx = GContextBuilder::new().mem_size(1024 * 1024).build()?;
+                // let mut ctx = GContextBuilder::new().mem_size(719).build()?;
+                // let bid = ctx.register_scratch_buffer(ScratchBuffer::new(195))?;
                 // ctx.set_scratch_buffer(Some(bid))?;
                 let mut g = GGraph::new(1);
                 let mut ta = ctx.tensor(GType::F32, $shape_a)?;

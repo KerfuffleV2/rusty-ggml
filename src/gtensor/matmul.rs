@@ -80,7 +80,10 @@ where
             if !self.md.can_mul_mat_with(&rmd) {
                 Err(GTensorError::InvalidOperation)?;
             }
-            unsafe { Ok(gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr)) }
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape)
+                    .fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr))) }
         })
     }
 }
@@ -97,8 +100,16 @@ macro_rules! mk_gmulmatinstances {
                     if !self.md.can_mul_mat_with(&rmd) {
                         Err(GTensorError::InvalidOperation)?;
                     }
+                    let shp = if self.md.shape.len() < rmd.shape.len() {
+                        &self.md.shape[..]
+                    } else {
+                        &rmd.shape[..]
+                    };
+                    let mr =
+                        GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, shp)
+                            .fit_or_die()?;
                     unsafe {
-                        Ok(gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr))
+                        Ok((mr, gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr)))
                     }
                 })
             }

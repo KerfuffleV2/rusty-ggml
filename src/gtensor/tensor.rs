@@ -18,14 +18,14 @@ use crate::{
 
 #[derive(Debug, Error, Clone)]
 pub enum GTensorError {
-    #[error("Merp")]
-    Merp,
     #[error("Type mismatch")]
     TypeMismatch,
     #[error("Bad data length in populate - got {got}, expected {expected}")]
     BadPopulate { got: usize, expected: usize },
     #[error("Invalid tensor operation: invariants violated")]
     InvalidOperation,
+    #[error("GGML tensor operation returned NULL")]
+    NullPointer,
     #[error("General error: {0}")]
     General(Arc<anyhow::Error>),
 }
@@ -226,13 +226,18 @@ where
 {
     /// # Safety
     /// Must be called with context mutex held.
-    pub(crate) unsafe fn new_from_ptr(ctx: &GContext, p: *mut gg::ggml_tensor) -> Self {
-        let tptr = NonNull::new(p).expect("Got null pointer");
-        Self {
+    pub(crate) unsafe fn new_from_ptr(
+        ctx: &GContext,
+        ictx: &mut IContext,
+        (mr, p): (GMemoryRequest, *mut gg::ggml_tensor),
+    ) -> Result<Self> {
+        let tptr = NonNull::new(p).ok_or(GTensorError::NullPointer)?;
+        ictx.update_used_memory(&mr)?;
+        Ok(Self {
             ctx: ctx.clone(),
             md: GTensorMetadata::from_ptr(tptr),
             tptr,
-        }
+        })
     }
 
     pub(crate) fn make_dead_clone<const ODIMS: usize>(&self) -> GTensor<ODIMS>
@@ -248,24 +253,24 @@ where
 
     pub(crate) fn with_tensor<OUT, F>(&self, fun: F) -> Result<OUT>
     where
-        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<OUT>,
+        F: FnOnce(&GContext, &mut IContext, *mut gg::ggml_tensor) -> Result<OUT>,
     {
         self.ctx
-            .with_icontext(|ctx, ictx| fun(ctx, &ictx, self.tptr.as_ptr()))
+            .with_icontext(|ctx, mut ictx| fun(ctx, &mut ictx, self.tptr.as_ptr()))
     }
 
     pub(crate) fn with_tensor_infallible<OUT, F>(&self, fun: F) -> Result<OUT>
     where
-        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> OUT,
+        F: FnOnce(&GContext, &mut IContext, *mut gg::ggml_tensor) -> OUT,
     {
         self.ctx
-            .with_icontext_infallible(|ictx| fun(&self.ctx, &ictx, self.tptr.as_ptr()))
+            .with_icontext_infallible(|mut ictx| fun(&self.ctx, &mut ictx, self.tptr.as_ptr()))
     }
 
     pub(crate) fn with_tensor_delay_failure<OUT, DF, F>(&self, dfun: DF, fun: F) -> OUT
     where
         DF: Fn() -> OUT,
-        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<OUT>,
+        F: FnOnce(&GContext, &mut IContext, *mut gg::ggml_tensor) -> Result<OUT>,
     {
         self.ctx
             .delay_failure_with_icontext(dfun, |ictx| fun(&self.ctx, ictx, self.tptr.as_ptr()))
@@ -282,12 +287,17 @@ where
     pub(crate) fn new_unary<const ODIMS: usize, F>(&self, fun: F) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
-        F: FnOnce(&GContext, &IContext, *mut gg::ggml_tensor) -> Result<*mut gg::ggml_tensor>,
+        F: FnOnce(
+            &GContext,
+            &mut IContext,
+            *mut gg::ggml_tensor,
+        ) -> Result<(GMemoryRequest, *mut gg::ggml_tensor)>,
     {
         self.with_tensor_delay_failure(
             || self.make_dead_clone(),
-            |ctx, ictx, tptr| unsafe {
-                Ok(GTensor::<ODIMS>::new_from_ptr(ctx, fun(ctx, ictx, tptr)?))
+            |ctx, ictx, tptr| {
+                let fresult = fun(ctx, ictx, tptr)?;
+                unsafe { GTensor::<ODIMS>::new_from_ptr(ctx, ictx, fresult) }
             },
         )
     }
@@ -303,10 +313,10 @@ where
         Dim<ODIMS>: DimValid,
         F: FnOnce(
             &GContext,
-            &IContext,
+            &mut IContext,
             *mut gg::ggml_tensor,
             *mut gg::ggml_tensor,
-        ) -> Result<*mut gg::ggml_tensor>,
+        ) -> Result<(GMemoryRequest, *mut gg::ggml_tensor)>,
         T: AsRef<GTensor<RDIMS>>,
     {
         let rhs = rhs.as_ref();
@@ -322,11 +332,11 @@ where
 
         self.ctx.delay_failure_with_icontext(
             || self.make_dead_clone(),
-            |ictx| {
+            |mut ictx| {
+                let ictx = &mut ictx;
                 let (ltptr, rtptr) = (self.tptr.as_ptr(), rhs.tptr.as_ptr());
-                Ok(unsafe {
-                    GTensor::<ODIMS>::new_from_ptr(&self.ctx, fun(&self.ctx, ictx, ltptr, rtptr)?)
-                })
+                let fresult = fun(&self.ctx, ictx, ltptr, rtptr)?;
+                unsafe { GTensor::<ODIMS>::new_from_ptr(&self.ctx, ictx, fresult) }
             },
         )
     }
@@ -631,8 +641,9 @@ where
     /// **Note**: This immediately overwrites `self` with the copy.
     pub fn copy_from<T: AsRef<GTensor<DIMS>>>(&mut self, rhs: T) {
         let nt = self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
-            GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::F32, []);
-            Ok(unsafe { gg::ggml_cpy(ictx.gptr(), rtptr, ltptr) })
+            let md = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::F32, [])
+                .fit_or_die()?;
+            Ok((md, unsafe { gg::ggml_cpy(ictx.gptr(), rtptr, ltptr) }))
         });
 
         *self = nt;

@@ -1,6 +1,6 @@
 [package]
 name = "rusty-ggml"
-version = "0.0.5"
+version = "0.0.6"
 description = "Idiomatic bindings for the GGML library (pre-alpha)"
 repository = "https://github.com/KerfuffleV2/rusty-ggml"
 keywords = ["deep-learning", "machine-learning", "tensors", "ggml", "ml"]

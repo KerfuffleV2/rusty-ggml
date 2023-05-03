@@ -104,7 +104,10 @@ where
             if self.md.typ != GType::F32 {
                 Err(GTensorError::TypeMismatch)?;
             }
-            unsafe { Ok(gg::ggml_map_unary_f32(ictx.gptr(), tptr, Some(fun))) }
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape)
+                    .fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_map_unary_f32(ictx.gptr(), tptr, Some(fun)))) }
         })
     }
 
@@ -156,17 +159,17 @@ where
         ),
     ) -> Self {
         let rtyp = rhs.as_ref().md.typ;
-        self.new_binary(rhs, |_ctx, ictx, ltptr, rtptr| {
-            //
+        self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
             if self.md.typ != GType::F32 || rtyp != GType::F32 {
                 Err(GTensorError::TypeMismatch)?;
             }
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape)
+                    .fit_or_die()?;
             unsafe {
-                Ok(gg::ggml_map_binary_f32(
-                    ictx.gptr(),
-                    ltptr,
-                    rtptr,
-                    Some(fun),
+                Ok((
+                    mr,
+                    gg::ggml_map_binary_f32(ictx.gptr(), ltptr, rtptr, Some(fun)),
                 ))
             }
         })

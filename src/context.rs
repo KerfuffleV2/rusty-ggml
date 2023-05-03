@@ -30,7 +30,7 @@ pub enum GContextError {
     Unknown,
 
     // FIXME: Add the other fields to the message.
-    #[error("Not enough memory for request of type {:?}", .0.reqtype)]
+    #[error("Not enough memory for request {0:?}")]
     InsufficientMemory(GMemoryRequest),
 
     // FIXME: Allow including more detail about what went wrong.
@@ -92,6 +92,7 @@ impl IContext {
     }
 
     pub(crate) fn update_used_memory(&mut self, mr: &GMemoryRequest) -> Result<()> {
+        let mut mr = *mr;
         ensure!(
             mr.required_scratch == 0 || self.current_scratch_buffer == mr.current_scratch_buffer,
             "Scratch buffer mismatch in IContext::use_memory. Current: {:?}, expected: {:?}",
@@ -103,17 +104,21 @@ impl IContext {
             wut => bail!("Request type {wut:?} currently not implemented in IContext::use_memory"),
         }
         let new_ctx_used = self.context_used + mr.required_ctx;
-        ensure!(
-            new_ctx_used <= self.context_memory,
-            GContextError::InsufficientMemory(*mr)
-        );
+        if new_ctx_used > self.context_memory {
+            mr.fits = false;
+            bail!(GContextError::InsufficientMemory(mr));
+        }
         if let Some(bufid) = &mr.current_scratch_buffer {
             let buf = &mut self.scratch_buffers[*bufid];
             let new_scratch_used = buf.used + mr.required_scratch;
-            ensure!(
-                new_scratch_used <= buf.buf.len(),
-                GContextError::InsufficientMemory(*mr)
-            );
+            if new_scratch_used > buf.buf.len() {
+                println!(
+                    "MEM(scratch): {new_scratch_used} > {} -- {mr:?}",
+                    buf.buf.len()
+                );
+                mr.fits = false;
+                bail!(GContextError::InsufficientMemory(mr));
+            }
             buf.used = new_scratch_used;
         }
         self.context_used = new_ctx_used;
@@ -129,6 +134,7 @@ pub struct GContext {
     pub(crate) ptrval: usize,
 
     // Amount of context memory allocated (in bytes)
+    #[allow(dead_code)]
     pub(crate) context_size: usize,
 
     #[allow(dead_code)]
@@ -281,10 +287,10 @@ impl GContext {
     pub(crate) fn delay_failure_with_icontext<OUT, DF, F>(&self, dfun: DF, fun: F) -> OUT
     where
         DF: Fn() -> OUT,
-        F: FnOnce(&MutexGuard<IContext>) -> Result<OUT>,
+        F: FnOnce(&mut IContext) -> Result<OUT>,
     {
         self.with_icontext_infallible(|mut ictx| {
-            fun(&ictx).unwrap_or_else(|e| {
+            fun(&mut ictx).unwrap_or_else(|e| {
                 // We have the context mutex but the handler function returned
                 // an error condition. So store the error in the context and mark it as dead.
                 self.dead.store(true, atomic::Ordering::SeqCst);
@@ -324,7 +330,7 @@ impl GContext {
         Dim<DIMS>: DimValid,
         DimPair<DIMS, 4>: DimLt,
     {
-        self.with_icontext(|_ctx, mut ictx| {
+        self.with_icontext(|ctx, mut ictx| {
             let mr = GMemoryRequest::estimate_tensor_request_ictx(self, &ictx, typ, shape);
             mr.fit_or_die()?;
 
@@ -350,8 +356,7 @@ impl GContext {
                 if p.is_null() {
                     Err(GContextError::TensorCreationFailed)?;
                 }
-                ictx.update_used_memory(&mr)?;
-                Ok(GTensor::new_from_ptr(self, p))
+                GTensor::new_from_ptr(ctx, &mut ictx, (mr, p))
             }
         })
     }
@@ -372,7 +377,7 @@ impl GContext {
     /// **Note**: Scratch buffers cannot be removed directly and are only freed
     /// when the [GContext] structure is dropped.
     pub fn set_scratch_buffer(&self, maybebufid: Option<usize>) -> Result<()> {
-        self.with_icontext(|ctx, mut ictx| {
+        self.with_icontext(|_ctx, mut ictx| {
             let (size, data) = if let Some(bufid) = maybebufid {
                 if bufid >= ictx.scratch_buffers.len() {
                     Err(GContextError::InvalidScratchBufferId(bufid))?;

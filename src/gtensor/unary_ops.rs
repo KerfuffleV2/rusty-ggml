@@ -1,17 +1,17 @@
 use ggml_sys_bleedingedge as gg;
 
 use super::tensor::*;
-use crate::{dims::*, validation::GMemoryRequest};
+use crate::{dims::*, util::GType, validation::GMemoryRequest};
 
 macro_rules! mk_simple_uops {
   ( $($(#[$attr:meta])* [$opname:ident, $gfname:ident]),* $(,)? ) => { $(
     $(#[$attr])*
     pub fn $opname(&self) -> Self {
         self.new_unary(|ctx, ictx, tptr| {
-            let md = GMemoryRequest::estimate_tensor_request_ictx(
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(
                 ctx, ictx, self.md.typ, self.md.shape
             ).fit_or_die()?;
-            unsafe { Ok(gg::$gfname(ictx.gptr(), tptr)) }
+            unsafe { Ok((mr, gg::$gfname(ictx.gptr(), tptr))) }
         })
     }
   )* }
@@ -249,7 +249,11 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimLt,
     {
-        self.new_unary(|ctx, ictx, tptr| unsafe { Ok(gg::ggml_mean(ictx.gptr(), tptr)) })
+        self.new_unary(|ctx, ictx, tptr| {
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::F32, [1])
+                .fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_mean(ictx.gptr(), tptr))) }
+        })
     }
 
     /// Elementwise `sum` of tensor `A`.
@@ -272,26 +276,49 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimLt,
     {
-        self.new_unary(|ctx, ictx, tptr| unsafe { Ok(gg::ggml_sum(ictx.gptr(), tptr)) })
+        self.new_unary(|ctx, ictx, tptr| {
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, [1])
+                .fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_sum(ictx.gptr(), tptr))) }
+        })
     }
 
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
+    // FIXME: Make reshape_like (another tensor) also
     pub fn reshape<const ODIMS: usize>(&self, ne: [usize; ODIMS]) -> GTensor<ODIMS>
     where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 2>: DimGtE,
         DimPair<ODIMS, 4>: DimLt,
     {
-        self.new_unary(|ctx, ictx, tptr| unsafe {
-            Ok(match ODIMS {
-                2 => gg::ggml_reshape_2d(ictx.gptr(), tptr, ne[1] as i64, ne[0] as i64),
-                3 => {
-                    gg::ggml_reshape_3d(ictx.gptr(), tptr, ne[1] as i64, ne[0] as i64, ne[2] as i64)
-                }
+        self.new_unary(|ctx, ictx, tptr| {
+            let shp = match ODIMS {
+                2 => vec![ne[1], ne[0]],
+                3 => vec![ne[1], ne[0], ne[2]],
                 _ => Err(GTensorError::InvalidOperation)?,
-            })
+            };
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, shp)
+                .fit_or_die()?;
+            Ok((
+                mr,
+                match ODIMS {
+                    2 => unsafe {
+                        gg::ggml_reshape_2d(ictx.gptr(), tptr, ne[1] as i64, ne[0] as i64)
+                    },
+                    3 => unsafe {
+                        gg::ggml_reshape_3d(
+                            ictx.gptr(),
+                            tptr,
+                            ne[1] as i64,
+                            ne[0] as i64,
+                            ne[2] as i64,
+                        )
+                    },
+                    _ => Err(GTensorError::InvalidOperation)?,
+                },
+            ))
         })
     }
 
@@ -307,30 +334,37 @@ where
         Dim<ODIMS>: DimValid,
         DimPair<ODIMS, 3>: DimLt,
     {
-        self.new_unary(|ctx, ictx, tptr| unsafe {
-            let elsize = gg::ggml_element_size(tptr);
-            Ok(match ODIMS {
-                1 => gg::ggml_view_1d(ictx.gptr(), tptr, ne[0], elsize * offset[0]),
-                2 => gg::ggml_view_2d(
-                    ictx.gptr(),
-                    tptr,
-                    ne[1],
-                    ne[0],
-                    elsize * offset[1],
-                    elsize * offset[0],
-                ),
-                3 => gg::ggml_view_3d(
-                    ictx.gptr(),
-                    tptr,
-                    ne[1],
-                    ne[0],
-                    ne[2],
-                    elsize * offset[1],
-                    elsize * offset[0],
-                    elsize * offset[2],
-                ),
-                _ => Err(GTensorError::InvalidOperation)?,
-            })
+        self.new_unary(|ctx, ictx, tptr| {
+            let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, [])
+                .fit_or_die()?;
+            unsafe {
+                let elsize = gg::ggml_element_size(tptr);
+                Ok((
+                    mr,
+                    match ODIMS {
+                        1 => gg::ggml_view_1d(ictx.gptr(), tptr, ne[0], elsize * offset[0]),
+                        2 => gg::ggml_view_2d(
+                            ictx.gptr(),
+                            tptr,
+                            ne[1],
+                            ne[0],
+                            elsize * offset[1],
+                            elsize * offset[0],
+                        ),
+                        3 => gg::ggml_view_3d(
+                            ictx.gptr(),
+                            tptr,
+                            ne[1],
+                            ne[0],
+                            ne[2],
+                            elsize * offset[1],
+                            elsize * offset[0],
+                            elsize * offset[2],
+                        ),
+                        _ => Err(GTensorError::InvalidOperation)?,
+                    },
+                ))
+            }
         })
     }
 
@@ -338,8 +372,12 @@ where
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     pub fn diag_mask_inf(self, val: usize) -> Self {
-        self.new_unary(|_ctx, ictx, tptr| unsafe {
-            Ok(gg::ggml_diag_mask_inf(ictx.gptr(), tptr, val as i32))
+        self.new_unary(|ctx, ictx, tptr| {
+            // Creates a view plus a i32 tensor with one item.
+            let mr1 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, []);
+            let mr2 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::I32, [1]);
+            let mr = (mr1 + mr2).fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_diag_mask_inf(ictx.gptr(), tptr, val as i32))) }
         })
     }
 
@@ -347,14 +385,17 @@ where
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     pub fn rope(self, n_past: usize, n_dims: usize, mode: usize) -> Self {
-        self.new_unary(|_ctx, ictx, tptr| unsafe {
-            Ok(gg::ggml_rope(
-                ictx.gptr(),
-                tptr,
-                n_past as i32,
-                n_dims as i32,
-                mode as i32,
-            ))
+        self.new_unary(|ctx, ictx, tptr| {
+            // Creates a view plus a i32 tensor with three items.
+            let mr1 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, []);
+            let mr2 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::I32, [3]);
+            let mr = (mr1 + mr2).fit_or_die()?;
+            unsafe {
+                Ok((
+                    mr,
+                    gg::ggml_rope(ictx.gptr(), tptr, n_past as i32, n_dims as i32, mode as i32),
+                ))
+            }
         })
     }
 }
