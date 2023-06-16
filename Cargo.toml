@@ -8,8 +8,17 @@ edition = "2021"
 license = "MIT"
 resolver = "2"
 
+[features]
+default = ["ggml-sys-bleedingedge/use_cmake"]
+no_k_quants = ["ggml-sys-bleedingedge/no_k_quants"]
+no_accelerate = ["ggml-sys-bleedingedge/no_accelerate"]
+cublas = ["ggml-sys-bleedingedge/cublas"]
+clblast = ["ggml-sys-bleedingedge/clblast"]
+openblas = ["ggml-sys-bleedingedge/openblas"]
+metal = ["ggml-sys-bleedingedge/metal"]
+
 [dependencies]
-ggml-sys-bleedingedge = "=2305030125.0.0"
+ggml-sys-bleedingedge = "=2306162112.0.0"
 anyhow = "1"
 thiserror = "1"
 num-traits = "0.2"

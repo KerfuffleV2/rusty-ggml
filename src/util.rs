@@ -26,15 +26,30 @@ pub enum GError {
     num_derive::ToPrimitive,
 )]
 /// GGML element type. Items starting with `Q` generally will be quantized.
+#[allow(non_camel_case_types)]
 pub enum GType {
     F32 = gg::ggml_type_GGML_TYPE_F32,
     F16 = gg::ggml_type_GGML_TYPE_F16,
     Q4_0 = gg::ggml_type_GGML_TYPE_Q4_0,
     Q4_1 = gg::ggml_type_GGML_TYPE_Q4_1,
-    Q4_2 = gg::ggml_type_GGML_TYPE_Q4_2,
     Q5_0 = gg::ggml_type_GGML_TYPE_Q5_0,
     Q5_1 = gg::ggml_type_GGML_TYPE_Q5_1,
     Q8_0 = gg::ggml_type_GGML_TYPE_Q8_0,
+    /// Used internally, may not be available for (de)quantization.
+    Q8_1 = gg::ggml_type_GGML_TYPE_Q8_1,
+    #[cfg(not(feature = "no_k_quants"))]
+    Q2_K =  gg::ggml_type_GGML_TYPE_Q2_K,
+    #[cfg(not(feature = "no_k_quants"))]
+    Q3_K =  gg::ggml_type_GGML_TYPE_Q3_K,
+    #[cfg(not(feature = "no_k_quants"))]
+    Q4_K =  gg::ggml_type_GGML_TYPE_Q4_K,
+    #[cfg(not(feature = "no_k_quants"))]
+    Q5_K =  gg::ggml_type_GGML_TYPE_Q5_K,
+    #[cfg(not(feature = "no_k_quants"))]
+    Q6_K =  gg::ggml_type_GGML_TYPE_Q6_K,
+    #[cfg(not(feature = "no_k_quants"))]
+    /// Used internally, may not be available for (de)quantization.
+    Q8_K =  gg::ggml_type_GGML_TYPE_Q8_K,
     I8 = gg::ggml_type_GGML_TYPE_I8,
     I16 = gg::ggml_type_GGML_TYPE_I16,
     I32 = gg::ggml_type_GGML_TYPE_I32,
