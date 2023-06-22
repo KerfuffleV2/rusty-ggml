@@ -235,9 +235,9 @@ where
                 .fit_or_die()?;
             Ok((mr, unsafe {
                 if STRIDE == 1 {
-                    gg::ggml_conv_1d_1s(ictx.gptr(), ltptr, rtptr)
+                    gg::ggml_conv_1d_s1_ph(ictx.gptr(), ltptr, rtptr)
                 } else {
-                    gg::ggml_conv_1d_2s(ictx.gptr(), ltptr, rtptr)
+                    gg::ggml_conv_1d_s2_ph(ictx.gptr(), ltptr, rtptr)
                 }
             }))
         })

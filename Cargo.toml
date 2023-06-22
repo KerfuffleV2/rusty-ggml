@@ -1,9 +1,9 @@
 [package]
 name = "rusty-ggml"
-version = "0.0.6"
+version = "0.0.7"
 description = "Idiomatic bindings for the GGML library (pre-alpha)"
 repository = "https://github.com/KerfuffleV2/rusty-ggml"
-keywords = ["deep-learning", "machine-learning", "tensors", "ggml", "ml"]
+keywords = ["deep-learning", "machine-learning", "tensor", "ggml", "ml"]
 edition = "2021"
 license = "MIT"
 resolver = "2"
@@ -18,7 +18,7 @@ openblas = ["ggml-sys-bleedingedge/openblas"]
 metal = ["ggml-sys-bleedingedge/metal"]
 
 [dependencies]
-ggml-sys-bleedingedge = "=2306162112.0.0"
+ggml-sys-bleedingedge = "=2306220059.0.0"
 anyhow = "1"
 thiserror = "1"
 num-traits = "0.2"

@@ -88,3 +88,22 @@ impl GType {
             .map_or(0, |val| unsafe { gg::ggml_blck_size(val) } as usize)
     }
 }
+
+#[repr(u32)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    num_derive::FromPrimitive,
+    num_derive::ToPrimitive,
+)]
+/// GGML backend types
+pub enum GBackend {
+    Cpu = gg::ggml_backend_GGML_BACKEND_CPU,
+    Gpu = gg::ggml_backend_GGML_BACKEND_GPU,
+    GpuSplit = gg::ggml_backend_GGML_BACKEND_GPU_SPLIT,
+}
