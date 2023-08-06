@@ -204,14 +204,12 @@ where
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
-    pub fn conv_1d<
-        const STRIDE: usize,
-        const RDIMS: usize,
-        const ODIMS: usize,
-        T: AsRef<GTensor<RDIMS>>,
-    >(
+    pub fn conv_1d<const RDIMS: usize, const ODIMS: usize, T: AsRef<GTensor<RDIMS>>>(
         &self,
         rhs: T,
+        s0: usize,
+        p0: usize,
+        d0: usize,
     ) -> Self
     where
         Dim<RDIMS>: DimValid,
@@ -220,8 +218,6 @@ where
         DimPair<DIMS, 4>: DimLt,
         DimPair<RDIMS, 2>: DimGtE,
         DimPair<ODIMS, 2>: DimEq,
-        DimPair<STRIDE, 1>: DimGtE,
-        DimPair<STRIDE, 3>: DimLt,
     {
         let rmd = rhs.as_ref().md.clone();
         self.new_binary(rhs, |ctx, ictx, ltptr, rtptr| {
@@ -234,11 +230,7 @@ where
             let mr = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::F32, shp)
                 .fit_or_die()?;
             Ok((mr, unsafe {
-                if STRIDE == 1 {
-                    gg::ggml_conv_1d_s1_ph(ictx.gptr(), ltptr, rtptr)
-                } else {
-                    gg::ggml_conv_1d_s2_ph(ictx.gptr(), ltptr, rtptr)
-                }
+                gg::ggml_conv_1d(ictx.gptr(), ltptr, rtptr, s0 as i32, p0 as i32, d0 as i32)
             }))
         })
     }

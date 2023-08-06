@@ -18,7 +18,7 @@ openblas = ["ggml-sys-bleedingedge/openblas"]
 metal = ["ggml-sys-bleedingedge/metal"]
 
 [dependencies]
-ggml-sys-bleedingedge = "=2306220059.0.0"
+ggml-sys-bleedingedge = "=2308051810.0.0"
 anyhow = "1"
 thiserror = "1"
 num-traits = "0.2"
