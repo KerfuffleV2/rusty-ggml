@@ -64,6 +64,9 @@ pub(crate) struct IContext {
     pub(crate) failed: Option<Arc<anyhow::Error>>,
 }
 
+// FIXME: YOLO? It's an internal struct and only lives in an Arc.
+unsafe impl Send for IContext {}
+
 impl Drop for IContext {
     // Since `IContext` lives inside an `Arc` this will only happen
     // when the very last instance of the `Arc` is dropped.
