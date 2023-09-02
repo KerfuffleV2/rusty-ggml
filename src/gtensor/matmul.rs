@@ -109,7 +109,14 @@ macro_rules! mk_gmulmatinstances {
                         GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, shp)
                             .fit_or_die()?;
                     unsafe {
-                        Ok((mr, gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr)))
+                        let t = gg::ggml_mul_mat(ictx.gptr(), ltptr, rtptr);
+                        // FIXME: Horrible hack to pretend mul_mat has the old non-broadcasting behavior.
+                        let real_dims = (*t).ne.iter().take_while(|i| **i != 1).collect::<Vec<_>>().len();
+                        if real_dims != $o {
+                            Err(GTensorError::InvalidOperation)?;
+                        }
+                        (*t).n_dims = $o;
+                        Ok((mr, t))
                     }
                 })
             }

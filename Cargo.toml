@@ -1,6 +1,6 @@
 [package]
 name = "rusty-ggml"
-version = "0.0.7"
+version = "0.0.8"
 description = "Idiomatic bindings for the GGML library (pre-alpha)"
 repository = "https://github.com/KerfuffleV2/rusty-ggml"
 keywords = ["deep-learning", "machine-learning", "tensor", "ggml", "ml"]
@@ -13,14 +13,15 @@ default = ["ggml-sys-bleedingedge/use_cmake"]
 no_k_quants = ["ggml-sys-bleedingedge/no_k_quants"]
 no_accelerate = ["ggml-sys-bleedingedge/no_accelerate"]
 cublas = ["ggml-sys-bleedingedge/cublas"]
+hipblas = ["ggml-sys-bleedingedge/hipblas"]
 clblast = ["ggml-sys-bleedingedge/clblast"]
 openblas = ["ggml-sys-bleedingedge/openblas"]
 metal = ["ggml-sys-bleedingedge/metal"]
 
 [dependencies]
-ggml-sys-bleedingedge = "=2306220059.0.0"
+ggml-sys-bleedingedge = "=2309021811.0.0"
 anyhow = "1"
 thiserror = "1"
 num-traits = "0.2"
-num-derive="0.3"
+num-derive="0.4"
 bytemuck = { version = "1", features = ["extern_crate_alloc"] }

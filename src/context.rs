@@ -64,6 +64,9 @@ pub(crate) struct IContext {
     pub(crate) failed: Option<Arc<anyhow::Error>>,
 }
 
+// FIXME: YOLO? It's an internal struct and only lives in an Arc.
+unsafe impl Send for IContext {}
+
 impl Drop for IContext {
     // Since `IContext` lives inside an `Arc` this will only happen
     // when the very last instance of the `Arc` is dropped.
@@ -405,8 +408,9 @@ impl GContext {
     /// Runs the supplied graph using this context.
     pub fn compute(&self, graph: &mut GGraph) -> Result<()> {
         ensure!(!self.no_alloc, GContextError::NoAlloc);
+        let n_threads = graph.n_threads;
         self.with_icontext_infallible(|ictx| unsafe {
-            gg::ggml_graph_compute(ictx.gptr(), &mut graph.0)
+            gg::ggml_graph_compute_with_ctx(ictx.gptr(), &mut graph.graph, n_threads as i32)
         })
     }
 
@@ -416,15 +420,16 @@ impl GContext {
     }
 }
 
-#[repr(transparent)]
-pub struct GGraph(gg::ggml_cgraph);
+pub struct GGraph {
+    n_threads: usize,
+    graph: gg::ggml_cgraph,
+}
 
 impl GGraph {
     /// Create a new computation graph with the specified number of threads.
     pub fn new(n_threads: usize) -> Self {
-        let mut graph = unsafe { std::mem::zeroed::<gg::ggml_cgraph>() };
-        graph.n_threads = n_threads as i32;
-        Self(graph)
+        let graph = unsafe { std::mem::zeroed::<gg::ggml_cgraph>() };
+        Self { n_threads, graph }
     }
 
     /// Register a tensor to be processed when the graph is computed.
@@ -439,7 +444,7 @@ impl GGraph {
         tensor
             .as_ref()
             .with_tensor_infallible(|_ctx, _ictx, tptr| unsafe {
-                gg::ggml_build_forward_expand(&mut self.0, tptr)
+                gg::ggml_build_forward_expand(&mut self.graph, tptr)
             })
     }
 }

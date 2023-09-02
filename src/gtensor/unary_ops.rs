@@ -112,24 +112,6 @@ where
         /// ```
         [neg, ggml_neg],
 
-        /// Perform LayerNorm operation on tensor `A`.
-        /// Returns a new tensor.
-        ///
-        /// `a.norm()`
-        ///
-        /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
-        /// for more information and comparison with the [GTensor::rms_norm] function.
-        [rms_norm, ggml_rms_norm],
-
-        /// Perform RMSNorm operation on tensor `A`.
-        /// Returns a new tensor.
-        ///
-        /// `a.rms_norm()`
-        ///
-        /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
-        /// for more information and comparison with the [GTensor::norm] function.
-        [norm, ggml_norm],
-
         /// Elementwise step operation on tensor `A`.
         /// Returns a new tensor.
         ///
@@ -227,6 +209,38 @@ where
         /// **Invariants**
         /// 1. Result will have the shape and type of `A`.
         [soft_max, ggml_soft_max],
+    }
+
+    /// Perform LayerNorm operation on tensor `A`.
+    /// Returns a new tensor.
+    ///
+    /// `a.norm()`
+    ///
+    /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
+    /// for more information and comparison with the [GTensor::rms_norm] function.
+    pub fn norm(&self, eps: f32) -> Self {
+        self.new_unary(|ctx, ictx, tptr| {
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape)
+                    .fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_norm(ictx.gptr(), tptr, eps))) }
+        })
+    }
+
+    /// Perform RMSNorm operation on tensor `A`.
+    /// Returns a new tensor.
+    ///
+    /// `a.rms_norm()`
+    ///
+    /// See [this helpful explanation](https://github.com/bzhangGo/rmsnorm/blob/2e726f1a3f106bb719056422f4f9b6aca03d3ce6/README.md)
+    /// for more information and comparison with the [GTensor::norm] function.
+    pub fn rms_norm(&self, eps: f32) -> Self {
+        self.new_unary(|ctx, ictx, tptr| {
+            let mr =
+                GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, self.md.shape)
+                    .fit_or_die()?;
+            unsafe { Ok((mr, gg::ggml_rms_norm(ictx.gptr(), tptr, eps))) }
+        })
     }
 
     /// Elementwise `mean` of tensor `A`.
@@ -384,7 +398,7 @@ where
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
     /// # !!!! FIXME !!!!
-    pub fn rope(self, n_past: usize, n_dims: usize, mode: usize) -> Self {
+    pub fn rope(self, n_past: usize, n_dims: usize, mode: usize, n_ctx: usize) -> Self {
         self.new_unary(|ctx, ictx, tptr| {
             // Creates a view plus a i32 tensor with three items.
             let mr1 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, []);
@@ -393,7 +407,49 @@ where
             unsafe {
                 Ok((
                     mr,
-                    gg::ggml_rope(ictx.gptr(), tptr, n_past as i32, n_dims as i32, mode as i32),
+                    gg::ggml_rope(
+                        ictx.gptr(),
+                        tptr,
+                        n_past as i32,
+                        n_dims as i32,
+                        mode as i32,
+                        n_ctx as i32,
+                    ),
+                ))
+            }
+        })
+    }
+
+    /// # !!!! FIXME !!!!
+    /// # !!!! FIXME !!!!
+    /// # !!!! FIXME !!!!
+    pub fn rope_custom(
+        self,
+        n_past: usize,
+        n_dims: usize,
+        mode: usize,
+        n_ctx: usize,
+        freq_base: f32,
+        freq_scale: f32,
+    ) -> Self {
+        self.new_unary(|ctx, ictx, tptr| {
+            // Creates a view plus a i32 tensor with three items.
+            let mr1 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, self.md.typ, []);
+            let mr2 = GMemoryRequest::estimate_tensor_request_ictx(ctx, ictx, GType::I32, [3]);
+            let mr = (mr1 + mr2).fit_or_die()?;
+            unsafe {
+                Ok((
+                    mr,
+                    gg::ggml_rope_custom(
+                        ictx.gptr(),
+                        tptr,
+                        n_past as i32,
+                        n_dims as i32,
+                        mode as i32,
+                        n_ctx as i32,
+                        freq_base,
+                        freq_scale,
+                    ),
                 ))
             }
         })

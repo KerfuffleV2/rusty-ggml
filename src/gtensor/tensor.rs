@@ -66,7 +66,11 @@ where
     pub(crate) fn from_ptr(tp: NonNull<gg::ggml_tensor>) -> Self {
         let (tr, tp) = (unsafe { tp.as_ref() }, tp.as_ptr());
         let (op, typ, shape) = {
-            assert_eq!(DIMS, tr.n_dims as usize, "Unexpected number of dimensions!");
+            assert_eq!(
+                DIMS, tr.n_dims as usize,
+                "Unexpected number of dimensions {:?}!",
+                tr.ne
+            );
             let mut shp = [0; DIMS];
             shp.iter_mut()
                 .zip(tr.ne[0..DIMS].iter())
